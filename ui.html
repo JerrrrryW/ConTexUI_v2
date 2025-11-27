@@ -173,6 +173,62 @@
         min-height: 16px;
         color: #374151;
       }
+      .req-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+      .req-list {
+        max-height: 200px;
+        overflow: auto;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        background: #fff;
+      }
+      .req-item {
+        padding: 6px;
+        border-bottom: 1px solid #f3f4f6;
+        cursor: pointer;
+      }
+      .req-item:hover {
+        background: #f9fafb;
+      }
+      .req-item.active {
+        background: #e0f2fe;
+      }
+      .pill {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 11px;
+        background: #f3f4f6;
+        margin-right: 4px;
+      }
+      .priority-list {
+        max-height: 200px;
+        overflow: auto;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        background: #fff;
+        padding: 6px;
+      }
+      .priority-row {
+        display: grid;
+        grid-template-columns: 32px 1fr 80px;
+        gap: 6px;
+        align-items: center;
+        padding: 4px 0;
+        border-bottom: 1px solid #f3f4f6;
+      }
+      .priority-row:last-child {
+        border-bottom: none;
+      }
+      .small-input {
+        width: 100%;
+        box-sizing: border-box;
+        font-size: 12px;
+        padding: 4px 6px;
+      }
       .export-block {
         margin-top: 6px;
         display: none;
@@ -243,6 +299,20 @@
       <div class="row" style="margin-top: 6px; align-items: center">
         <button id="parseDoc">解析文档</button>
         <div class="summary" id="reqSummary"></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>解析结果</h3>
+      <div class="req-grid">
+        <div>
+          <div class="summary">页面列表</div>
+          <div id="pageList" class="req-list"></div>
+        </div>
+        <div>
+          <div class="summary">信息项优先级（选中页面）</div>
+          <div id="pageInfo" class="priority-list"></div>
+        </div>
       </div>
     </div>
 

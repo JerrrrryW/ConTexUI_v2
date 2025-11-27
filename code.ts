@@ -1049,16 +1049,21 @@ type EnrichLibraryResponse = {
   }[];
 };
 
+const API_BASE = 'http://localhost:4000';
+const ENRICH_BASE = API_BASE;
+const PARSE_BASE = API_BASE;
+
 async function callParseDocument(docText: string): Promise<ParseDocResponse> {
-  const response = await fetch('/api/parse-doc', {
+  const response = await fetch(`${PARSE_BASE}/api/parse-doc`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ docText, fileId: FILE_KEY })
   });
+  const raw = await response.text();
   if (!response.ok) {
-    throw new Error(`解析失败 (${response.status})`);
+    throw new Error(`解析失败 (${response.status}): ${raw.slice(0, 160)}`);
   }
-  const data = (await response.json()) as ParseDocResponse;
+  const data = JSON.parse(raw) as ParseDocResponse;
   await persistRequirement({ ...data, updatedAt: Date.now() });
   return data;
 }
@@ -1093,15 +1098,16 @@ async function callEnrichLibrary(
     textPreviews?: SlotCandidate[];
   }[]
 ): Promise<EnrichLibraryResponse> {
-  const response = await fetch('/api/enrich-library', {
+  const response = await fetch(`${ENRICH_BASE}/api/enrich-library`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ fileId: FILE_KEY, items: summaries })
   });
+  const raw = await response.text();
   if (!response.ok) {
-    throw new Error(`元数据生成失败 (${response.status})`);
+    throw new Error(`元数据生成失败 (${response.status}): ${raw.slice(0, 160)}`);
   }
-  return (await response.json()) as EnrichLibraryResponse;
+  return JSON.parse(raw) as EnrichLibraryResponse;
 }
 
 async function handleParseDocument(docText: string) {
