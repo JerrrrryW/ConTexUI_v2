@@ -214,7 +214,7 @@
       }
       .priority-row {
         display: grid;
-        grid-template-columns: 32px 1fr 80px;
+        grid-template-columns: 48px 80px 1fr;
         gap: 6px;
         align-items: center;
         padding: 4px 0;
@@ -312,8 +312,16 @@
         <div>
           <div class="summary">信息项优先级（选中页面）</div>
           <div id="pageInfo" class="priority-list"></div>
+          <div class="row" style="justify-content: flex-end; margin-top: 6px">
+            <button id="recommendBindings">AI 推荐组件</button>
+          </div>
         </div>
       </div>
+      <div class="summary" style="margin-top: 6px">
+        <span>高优先级 ≤ 1 项</span>
+        <span style="margin-left: 8px">中优先级 ≤ 4 项</span>
+      </div>
+      <button id="saveRequirement" style="margin-top: 6px">保存解析结果</button>
     </div>
 
     <div class="section">
@@ -362,10 +370,15 @@
       const exportWrap = document.getElementById('exportWrap');
       const exportText = document.getElementById('exportText');
       const copyExportBtn = document.getElementById('copyExport');
+      const pageListEl = document.getElementById('pageList');
+      const pageInfoEl = document.getElementById('pageInfo');
+      const saveReqBtn = document.getElementById('saveRequirement');
+      const recommendBtn = document.getElementById('recommendBindings');
       let library = [];
       let requirement = null;
       let slotState = null;
       let slotFilter = '';
+      let selectedPageId = null;
       const DATA_TYPES = ['numeric', 'trend', 'alert', 'state', 'text', 'map', 'list'];
       const SLOT_TYPES = ['label', 'numericValue', 'unit', 'state', 'alert', 'listItem'];
 
@@ -538,6 +551,23 @@
         parent.postMessage({ pluginMessage: { type: 'parse-doc', docText } }, '*');
       };
 
+      saveReqBtn.onclick = () => {
+        if (!requirement) return;
+        parent.postMessage({ pluginMessage: { type: 'update-requirement', data: requirement } }, '*');
+        statusEl.textContent = '已保存解析结果';
+        statusEl.dataset.state = 'success';
+      };
+
+      recommendBtn.onclick = () => {
+        if (!selectedPageId) {
+          statusEl.textContent = '请先选择页面';
+          statusEl.dataset.state = 'error';
+          return;
+        }
+        statusEl.textContent = '向 AI 请求组件推荐…';
+        parent.postMessage({ pluginMessage: { type: 'recommend-bindings', pageId: selectedPageId } }, '*');
+      };
+
       useLibraryEl.onchange = () => {
         useLibraryEl.dataset.userToggled = 'true';
       };
@@ -555,6 +585,125 @@
           <span>信息项:${infoItems.length}</span>
           <span>页面:${pages.length}</span>
         `;
+        renderPageList();
+      };
+
+      const renderPageList = () => {
+        pageListEl.innerHTML = '';
+        if (!requirement?.pages?.length) {
+          pageListEl.textContent = '暂无解析结果';
+          pageInfoEl.innerHTML = '';
+          selectedPageId = null;
+          return;
+        }
+        requirement.pages.forEach((page) => {
+          const row = document.createElement('div');
+          row.className = 'req-item';
+          if (page.id === selectedPageId) row.classList.add('active');
+          const phase = requirement.phases?.find((p) => p.id === page.phaseId);
+          const role = requirement.roles?.find((r) => r.id === page.roleId);
+          const cond = requirement.conditions?.find((c) => c.id === page.conditionId);
+          row.innerHTML = `
+            <div>${page.name || '未命名页面'}</div>
+            <div class="summary">
+              <span class="pill">${phase?.name || 'Phase'}</span>
+              <span class="pill">${role?.name || 'Role'}</span>
+              <span class="pill">${cond?.name || 'Condition'}</span>
+            </div>
+          `;
+          row.onclick = () => {
+            selectedPageId = page.id;
+            renderPageList();
+            renderPageInfo(page);
+          };
+          pageListEl.appendChild(row);
+        });
+        if (!selectedPageId && requirement.pages.length) {
+          selectedPageId = requirement.pages[0].id;
+          renderPageList();
+          renderPageInfo(requirement.pages[0]);
+        }
+      };
+
+      const renderPageInfo = (page) => {
+        pageInfoEl.innerHTML = '';
+        if (!page?.infoPriorities?.length) {
+          pageInfoEl.textContent = '无信息项';
+          return;
+        }
+        const rows = page.infoPriorities
+          .slice()
+          .sort((a, b) => a.priority - b.priority)
+          .map((item) => {
+            const info = requirement.infoItems?.find((x) => x.id === item.infoItemId);
+            const row = document.createElement('div');
+            row.className = 'priority-row';
+
+            const tier = getTier(item);
+
+            const tierSelect = document.createElement('select');
+            ['high', 'medium', 'low'].forEach((t) => {
+              const opt = document.createElement('option');
+              opt.value = t;
+              opt.textContent = t;
+              tierSelect.appendChild(opt);
+            });
+            tierSelect.value = tier;
+
+            tierSelect.onchange = () => {
+              const nextTier = tierSelect.value;
+              if (!canAssignTier(page, item, nextTier)) {
+                statusEl.textContent = '高优先级 ≤1，中优先级 ≤4，请调整';
+                statusEl.dataset.state = 'error';
+                tierSelect.value = tier;
+                return;
+              }
+              setTier(item, nextTier);
+              renderPageInfo(page);
+              statusEl.textContent = '';
+            };
+
+            const nameInput = document.createElement('input');
+            nameInput.className = 'small-input';
+            nameInput.value = info?.name || item.infoItemId;
+            nameInput.onchange = () => {
+              if (info) info.name = nameInput.value;
+            };
+
+            const noteInput = document.createElement('input');
+            noteInput.className = 'small-input';
+            noteInput.placeholder = '备注';
+            noteInput.value = item.note || '';
+            noteInput.onchange = () => {
+              item.note = noteInput.value;
+            };
+
+            const bindingSelect = document.createElement('select');
+            const noneOpt = document.createElement('option');
+            noneOpt.value = '';
+            noneOpt.textContent = '未绑定组件';
+            bindingSelect.appendChild(noneOpt);
+            library.forEach((comp) => {
+              const opt = document.createElement('option');
+              opt.value = comp.id;
+              opt.textContent = comp.name;
+              bindingSelect.appendChild(opt);
+            });
+            const currentBinding = (page.preferredBindings || []).find(
+              (b) => b.infoItemId === item.infoItemId
+            );
+            bindingSelect.value = currentBinding?.componentId || '';
+            bindingSelect.onchange = () => {
+              setBinding(page, item.infoItemId, bindingSelect.value);
+            };
+
+            row.appendChild(tierSelect);
+            row.appendChild(nameInput);
+            row.appendChild(noteInput);
+            row.appendChild(bindingSelect);
+            return row;
+          });
+        rows.forEach((r) => pageInfoEl.appendChild(r));
       };
 
       copyExportBtn.onclick = () => {
@@ -563,6 +712,42 @@
         document.execCommand('copy');
         statusEl.textContent = '已复制到剪贴板';
         statusEl.dataset.state = 'success';
+      };
+
+      const getTier = (item) => {
+        if (item.tier) return item.tier;
+        if (item.priority <= 1) return 'high';
+        if (item.priority <= 5) return 'medium';
+        return 'low';
+      };
+
+      const setTier = (item, tier) => {
+        item.tier = tier;
+        if (tier === 'high') item.priority = 1;
+        else if (tier === 'medium') item.priority = 5;
+        else item.priority = 9;
+      };
+
+      const setBinding = (page, infoItemId, componentId) => {
+        const bindings = page.preferredBindings || [];
+        const found = bindings.find((b) => b.infoItemId === infoItemId);
+        if (found) {
+          found.componentId = componentId || undefined;
+        } else {
+          bindings.push({ infoItemId, componentId: componentId || undefined });
+        }
+        page.preferredBindings = bindings;
+      };
+
+      const canAssignTier = (page, currentItem, nextTier) => {
+        const counts = { high: 0, medium: 0, low: 0 };
+        page.infoPriorities.forEach((it) => {
+          const t = it === currentItem ? nextTier : getTier(it);
+          counts[t] += 1;
+        });
+        if (counts.high > 1) return false;
+        if (counts.medium > 4) return false;
+        return true;
       };
 
       // Request library & requirement on load

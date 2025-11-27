@@ -28,6 +28,7 @@ type PageDefinition = {
   name: string;
   infoPriorities: PageInfoPriority[];
   notes?: string;
+  preferredBindings?: InfoBinding[];
 };
 
 type RequirementModel = {
@@ -38,6 +39,8 @@ type RequirementModel = {
   pages: PageDefinition[];
   updatedAt: number;
 };
+
+type InfoBinding = { infoItemId: string; componentId?: string };
 
 type ComponentSlotType = 'label' | 'numericValue' | 'unit' | 'state' | 'alert' | 'listItem';
 type ComponentSlot = { slotName: string; nodeId: string; slotType: ComponentSlotType; dataType?: DataType };
@@ -65,6 +68,8 @@ type UpdateComponentMetaMessage = {
 type RequestSlotsMessage = { type: 'request-slots'; id: string };
 type SaveSlotsMessage = { type: 'save-slots'; id: string; slots: ComponentSlot[] };
 type EnrichLibraryMessage = { type: 'enrich-library' };
+type UpdateRequirementMessage = { type: 'update-requirement'; data: RequirementModel };
+type RecommendBindingsMessage = { type: 'recommend-bindings'; pageId?: string };
 type UpdateNoteMessage = { type: 'update-note'; id: string; note: string };
 type RemoveComponentMessage = { type: 'remove-component'; id: string };
 type PluginMessage =
@@ -78,6 +83,8 @@ type PluginMessage =
   | RequestSlotsMessage
   | SaveSlotsMessage
   | EnrichLibraryMessage
+  | UpdateRequirementMessage
+  | RecommendBindingsMessage
   | UpdateNoteMessage
   | RemoveComponentMessage;
 
@@ -187,6 +194,17 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
 
   if (msg.type === 'save-slots') {
     await saveSlots(msg.id, msg.slots);
+    return;
+  }
+
+  if (msg.type === 'update-requirement') {
+    await persistRequirement(msg.data);
+    sendRequirementToUI();
+    return;
+  }
+
+  if (msg.type === 'recommend-bindings') {
+    await handleRecommendBindings(msg.pageId);
     return;
   }
 
@@ -344,6 +362,27 @@ async function handleEnrichLibrary() {
     sendStatus('success');
   } catch (error) {
     figma.notify(`生成失败：${getErrorMessage(error)}`);
+    sendStatus('error', getErrorMessage(error));
+  } finally {
+    sendStatus('idle');
+  }
+}
+
+async function handleRecommendBindings(pageId?: string) {
+  if (!requirementModel) {
+    figma.notify('请先解析需求文档');
+    return;
+  }
+  try {
+    sendStatus('loading', '正在推荐组件');
+    const result = await callRecommendComponents(requirementModel.infoItems, componentLibrary);
+    applyRecommendedBindings(result, pageId);
+    await persistRequirement(requirementModel);
+    sendRequirementToUI();
+    figma.notify('已更新推荐组件');
+    sendStatus('success');
+  } catch (error) {
+    figma.notify(`推荐失败：${getErrorMessage(error)}`);
     sendStatus('error', getErrorMessage(error));
   } finally {
     sendStatus('idle');
@@ -944,6 +983,26 @@ function mergeArrays(a?: string[], b?: string[]): string[] | undefined {
   return merged.size ? Array.from(merged) : undefined;
 }
 
+function applyRecommendedBindings(result: RecommendComponentsResponse, pageId?: string) {
+  if (!requirementModel?.pages) return;
+  const targetPages = pageId
+    ? requirementModel.pages.filter((p) => p.id === pageId)
+    : requirementModel.pages;
+
+  targetPages.forEach((page) => {
+    const bindings = page.preferredBindings || [];
+    result.bindings.forEach((rec) => {
+      const existing = bindings.find((b) => b.infoItemId === rec.infoItemId);
+      if (existing) {
+        existing.componentId = rec.componentId;
+      } else {
+        bindings.push({ infoItemId: rec.infoItemId, componentId: rec.componentId });
+      }
+    });
+    page.preferredBindings = bindings;
+  });
+}
+
 function buildLibraryContext(items: ComponentExample[]): string {
   if (!items.length) return '';
   return items
@@ -1052,6 +1111,7 @@ type EnrichLibraryResponse = {
 const API_BASE = 'http://localhost:4000';
 const ENRICH_BASE = API_BASE;
 const PARSE_BASE = API_BASE;
+const RECO_BASE = API_BASE;
 
 async function callParseDocument(docText: string): Promise<ParseDocResponse> {
   const response = await fetch(`${PARSE_BASE}/api/parse-doc`, {
@@ -1072,15 +1132,16 @@ async function callRecommendComponents(
   infoItems: InfoItem[],
   library: ComponentExample[]
 ): Promise<RecommendComponentsResponse> {
-  const response = await fetch('/api/recommend-components', {
+  const response = await fetch(`${RECO_BASE}/api/recommend-components`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ infoItems, library })
   });
+  const raw = await response.text();
   if (!response.ok) {
-    throw new Error(`组件推荐失败 (${response.status})`);
+    throw new Error(`组件推荐失败 (${response.status}): ${raw.slice(0, 160)}`);
   }
-  return (await response.json()) as RecommendComponentsResponse;
+  return JSON.parse(raw) as RecommendComponentsResponse;
 }
 
 async function callEnrichLibrary(
