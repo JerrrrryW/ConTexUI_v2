@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>LLM Canvas Demo</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        margin: 8px;
+        font-size: 12px;
+      }
+      label {
+        display: block;
+        margin-bottom: 4px;
+        font-weight: 600;
+      }
+      input,
+      textarea {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 4px 6px;
+        font-size: 12px;
+      }
+      button {
+        margin-top: 8px;
+        width: 100%;
+        padding: 6px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div>
+      <label>OpenAI API Key</label>
+      <input id="key" type="password" placeholder="sk-..." />
+    </div>
+
+    <div style="margin-top: 8px">
+      <label>指令（自然语言）</label>
+      <textarea
+        id="prompt"
+        rows="4"
+        placeholder="例如：生成一个大号黄色按钮，文字为“开始使用”"
+      ></textarea>
+    </div>
+
+    <button id="run">生成到画布</button>
+
+    <script>
+      const runButton = document.getElementById('run');
+
+      runButton.onclick = () => {
+        const prompt = document.getElementById('prompt').value;
+        const apiKey = document.getElementById('key').value;
+
+        parent.postMessage(
+          {
+            pluginMessage: {
+              type: 'generate-design',
+              prompt,
+              apiKey
+            }
+          },
+          '*'
+        );
+      };
+    </script>
+  </body>
+</html>
