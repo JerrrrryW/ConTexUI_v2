@@ -5,6 +5,43 @@ type StatusMessage = {
   message?: string;
 };
 
+type Phase = { id: string; name: string; description?: string };
+type Role = { id: string; name: string; description?: string };
+type Condition = { id: string; name: string; description?: string };
+type DataType = 'numeric' | 'trend' | 'alert' | 'state' | 'text' | 'map' | 'list';
+
+type InfoItem = {
+  id: string;
+  name: string;
+  description?: string;
+  dataType: DataType;
+  semanticTags?: string[];
+};
+
+type PageInfoPriority = { infoItemId: string; priority: number; note?: string };
+
+type PageDefinition = {
+  id: string;
+  phaseId: string;
+  roleId: string;
+  conditionId: string;
+  name: string;
+  infoPriorities: PageInfoPriority[];
+  notes?: string;
+};
+
+type RequirementModel = {
+  phases: Phase[];
+  roles: Role[];
+  conditions: Condition[];
+  infoItems: InfoItem[];
+  pages: PageDefinition[];
+  updatedAt: number;
+};
+
+type ComponentSlotType = 'label' | 'numericValue' | 'unit' | 'state' | 'alert' | 'listItem';
+type ComponentSlot = { slotName: string; nodeId: string; slotType: ComponentSlotType; dataType?: DataType };
+
 type GenerateDesignMessage = {
   type: 'generate-design';
   prompt: string;
@@ -14,23 +51,51 @@ type GenerateDesignMessage = {
 };
 type ImportMessage = { type: 'import-section' };
 type RequestLibraryMessage = { type: 'request-library' };
+type ExportLibraryMessage = { type: 'export-library' };
+type ParseDocumentMessage = { type: 'parse-doc'; docText: string };
+type RequestRequirementMessage = { type: 'request-requirement' };
+type UpdateComponentMetaMessage = {
+  type: 'update-component-meta';
+  id: string;
+  name?: string;
+  description?: string;
+  tags?: string[];
+  supportedDataTypes?: DataType[];
+};
+type RequestSlotsMessage = { type: 'request-slots'; id: string };
+type SaveSlotsMessage = { type: 'save-slots'; id: string; slots: ComponentSlot[] };
+type EnrichLibraryMessage = { type: 'enrich-library' };
 type UpdateNoteMessage = { type: 'update-note'; id: string; note: string };
 type RemoveComponentMessage = { type: 'remove-component'; id: string };
 type PluginMessage =
   | GenerateDesignMessage
   | ImportMessage
   | RequestLibraryMessage
+  | ExportLibraryMessage
+  | ParseDocumentMessage
+  | RequestRequirementMessage
+  | UpdateComponentMetaMessage
+  | RequestSlotsMessage
+  | SaveSlotsMessage
+  | EnrichLibraryMessage
   | UpdateNoteMessage
   | RemoveComponentMessage;
 
 type ComponentExample = {
   id: string;
+  nodeId: string;
+  sectionId?: string;
   name: string;
   width: number;
   height: number;
   primaryColor?: string;
   sampleText?: string;
   note?: string;
+  description?: string;
+  tags?: string[];
+  supportedDataTypes?: DataType[];
+  slots?: ComponentSlot[];
+  lastUpdated?: number;
 };
 
 type LayerSpec = {
@@ -72,12 +137,17 @@ const FALLBACK_FONT: FontName = { family: 'Roboto', style: 'Regular' };
 const DEFAULT_BACKGROUND = '#F7F9FC';
 const DEFAULT_TEXT_COLOR = '#111827';
 let activeFont: FontName = DEFAULT_FONT;
-const LIBRARY_KEY = 'ctx-component-library';
+const FILE_KEY = figma.root?.id || 'figma-file';
+const LIBRARY_KEY = `ctx:${FILE_KEY}:library`;
+const REQUIREMENT_KEY = `ctx:${FILE_KEY}:requirement`;
+const LAYOUT_KEY = `ctx:${FILE_KEY}:layouts`;
 let componentLibrary: ComponentExample[] = [];
+let requirementModel: RequirementModel | null = null;
 
-figma.showUI(__html__, { width: 340, height: 320 });
+figma.showUI(__html__, { width: 540, height: 720 });
 
 initializeLibrary();
+initializeRequirement();
 
 figma.ui.onmessage = async (msg: PluginMessage) => {
   if (msg.type === 'import-section') {
@@ -87,6 +157,41 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
 
   if (msg.type === 'request-library') {
     sendLibraryToUI();
+    return;
+  }
+
+  if (msg.type === 'export-library') {
+    exportLibrary();
+    return;
+  }
+
+  if (msg.type === 'parse-doc') {
+    await handleParseDocument(msg.docText);
+    return;
+  }
+
+  if (msg.type === 'request-requirement') {
+    sendRequirementToUI();
+    return;
+  }
+
+  if (msg.type === 'update-component-meta') {
+    await updateComponentMeta(msg);
+    return;
+  }
+
+  if (msg.type === 'request-slots') {
+    await sendSlots(msg.id);
+    return;
+  }
+
+  if (msg.type === 'save-slots') {
+    await saveSlots(msg.id, msg.slots);
+    return;
+  }
+
+  if (msg.type === 'enrich-library') {
+    await handleEnrichLibrary();
     return;
   }
 
@@ -184,6 +289,67 @@ async function importSelectedSection() {
   figma.notify(`已导入 ${componentLibrary.length} 个组件`);
 }
 
+async function sendSlots(id: string) {
+  const component = componentLibrary.find((item) => item.id === id);
+  if (!component) return;
+  const node = await figma.getNodeByIdAsync(component.nodeId);
+  if (!node || !('children' in node)) {
+    figma.notify('未找到组件节点');
+    return;
+  }
+
+  const candidates = collectSlotCandidates(node as ChildrenMixin);
+  figma.ui.postMessage({
+    type: 'slots',
+    componentId: id,
+    candidates,
+    slots: component.slots || []
+  });
+}
+
+async function saveSlots(id: string, slots: ComponentSlot[]) {
+  const component = componentLibrary.find((item) => item.id === id);
+  if (!component) return;
+  component.slots = slots;
+  component.lastUpdated = Date.now();
+  await persistLibrary();
+
+  const node = await figma.getNodeByIdAsync(component.nodeId);
+  if (node && 'setPluginData' in node) {
+    try {
+      (node as BaseNode & PluginDataMixin).setPluginData('slots', JSON.stringify(slots));
+    } catch (_error) {
+      // ignore plugin data errors
+    }
+  }
+
+  figma.notify('已保存插槽配置');
+}
+
+async function handleEnrichLibrary() {
+  if (!componentLibrary.length) {
+    figma.notify('请先导入组件库');
+    return;
+  }
+
+  try {
+    sendStatus('loading', '正在生成组件元数据');
+    const summaries = await buildLibrarySummaries();
+    const result = await callEnrichLibrary(summaries);
+    const applied = applyEnrichResult(result);
+    await persistLibrary();
+    sendLibraryToUI();
+    figma.notify(`已应用 ${applied} 个组件的元数据推荐`);
+    figma.ui.postMessage({ type: 'library-enriched', applied });
+    sendStatus('success');
+  } catch (error) {
+    figma.notify(`生成失败：${getErrorMessage(error)}`);
+    sendStatus('error', getErrorMessage(error));
+  } finally {
+    sendStatus('idle');
+  }
+}
+
 async function updateNote(id: string, note: string) {
   const target = componentLibrary.find((item) => item.id === id);
   if (!target) return;
@@ -198,16 +364,68 @@ async function removeComponent(id: string) {
   await persistLibrary();
 }
 
+async function updateComponentMeta(msg: UpdateComponentMetaMessage) {
+  const target = componentLibrary.find((item) => item.id === msg.id);
+  if (!target) return;
+  if (typeof msg.name === 'string') target.name = msg.name;
+  if (typeof msg.description === 'string') target.description = msg.description;
+  if (Array.isArray(msg.tags)) target.tags = msg.tags;
+  if (Array.isArray(msg.supportedDataTypes)) target.supportedDataTypes = msg.supportedDataTypes;
+  target.lastUpdated = Date.now();
+  await persistLibrary();
+}
+
+async function initializeRequirement() {
+  try {
+    const saved = await figma.clientStorage.getAsync(REQUIREMENT_KEY);
+    if (saved && typeof saved === 'object') {
+      requirementModel = saved as RequirementModel;
+    }
+  } catch (_error) {
+    requirementModel = null;
+  }
+  sendRequirementToUI();
+}
+
+async function persistRequirement(model: RequirementModel) {
+  requirementModel = model;
+  try {
+    await figma.clientStorage.setAsync(REQUIREMENT_KEY, requirementModel);
+  } catch (_error) {
+    // ignore storage errors
+  }
+}
+
+function exportLibrary() {
+  const payload = {
+    exportedAt: Date.now(),
+    count: componentLibrary.length,
+    items: componentLibrary
+  };
+  figma.ui.postMessage({ type: 'library-export', data: payload });
+}
+
+function sendRequirementToUI() {
+  figma.ui.postMessage({ type: 'requirement', data: requirementModel });
+}
+
 function toComponentExample(frame: FrameNode): ComponentExample {
   const texts = collectTexts(frame);
   return {
     id: frame.id,
+    nodeId: frame.id,
+    sectionId: frame.parent?.id,
     name: frame.name || '组件',
     width: frame.width,
     height: frame.height,
     primaryColor: getPrimaryFill(frame),
     sampleText: texts[0],
-    note: ''
+    note: '',
+    description: '',
+    tags: [],
+    supportedDataTypes: [],
+    slots: [],
+    lastUpdated: Date.now()
   };
 }
 
@@ -648,6 +866,84 @@ function findComponentIdByName(name: string): string | undefined {
   return target?.id;
 }
 
+type SlotCandidate = { id: string; name: string; type: string; preview?: string };
+
+function collectSlotCandidates(root: ChildrenMixin): SlotCandidate[] {
+  const items: SlotCandidate[] = [];
+  const walk = (node: SceneNode) => {
+    if (node.type === 'TEXT') {
+      items.push({
+        id: node.id,
+        name: node.name || 'Text',
+        type: 'TEXT',
+        preview: (node as TextNode).characters.slice(0, 20)
+      });
+    }
+    if ('children' in node) {
+      for (const child of (node as ChildrenMixin).children) {
+        walk(child as SceneNode);
+      }
+    }
+  };
+  for (const child of root.children) {
+    walk(child as SceneNode);
+  }
+  return items;
+}
+
+async function buildLibrarySummaries() {
+  const summaries = await Promise.all(
+    componentLibrary.map(async (comp) => {
+      const node = await figma.getNodeByIdAsync(comp.nodeId);
+      const textPreviews =
+        node && 'children' in node ? collectSlotCandidates(node as ChildrenMixin) : [];
+      return {
+        id: comp.id,
+        name: comp.name,
+        primaryColor: comp.primaryColor,
+        sampleText: comp.sampleText,
+        description: comp.description,
+        tags: comp.tags,
+        supportedDataTypes: comp.supportedDataTypes,
+        width: comp.width,
+        height: comp.height,
+        slots: comp.slots,
+        textPreviews
+      };
+    })
+  );
+  return summaries;
+}
+
+function applyEnrichResult(result: EnrichLibraryResponse): number {
+  if (!result?.items?.length) return 0;
+  let applied = 0;
+  const map = new Map(result.items.map((i) => [i.id, i]));
+  componentLibrary = componentLibrary.map((comp) => {
+    const rec = map.get(comp.id);
+    if (!rec) return comp;
+    applied += 1;
+    return {
+      ...comp,
+      description: rec.description ?? comp.description,
+      tags: mergeArrays(comp.tags, rec.tags),
+      supportedDataTypes: rec.supportedDataTypes?.length
+        ? Array.from(new Set(rec.supportedDataTypes))
+        : comp.supportedDataTypes,
+      slots: rec.slots?.length ? rec.slots : comp.slots,
+      lastUpdated: Date.now()
+    };
+  });
+  return applied;
+}
+
+function mergeArrays(a?: string[], b?: string[]): string[] | undefined {
+  const merged = new Set<string>();
+  (a || []).forEach((v) => merged.add(v));
+  (b || []).forEach((v) => merged.add(v));
+  return merged.size ? Array.from(merged) : undefined;
+}
+
 function buildLibraryContext(items: ComponentExample[]): string {
   if (!items.length) return '';
   return items
@@ -735,4 +1031,94 @@ function sendStatus(state: StatusMessage['state'], message?: string) {
   const payload: StatusMessage = { type: 'status', state };
   if (message) payload.message = message;
   figma.ui.postMessage(payload);
+}
+
+// --- Backend stubs (to be wired to real endpoints) ---
+
+type ParseDocResponse = RequirementModel;
+type RecommendComponentsResponse = {
+  bindings: { infoItemId: string; componentId: string; slotHints?: Record<string, string> }[];
+};
+type EnrichLibraryResponse = {
+  items: {
+    id: string;
+    description?: string;
+    tags?: string[];
+    supportedDataTypes?: DataType[];
+    slots?: ComponentSlot[];
+  }[];
+};
+
+async function callParseDocument(docText: string): Promise<ParseDocResponse> {
+  const response = await fetch('/api/parse-doc', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ docText, fileId: FILE_KEY })
+  });
+  if (!response.ok) {
+    throw new Error(`解析失败 (${response.status})`);
+  }
+  const data = (await response.json()) as ParseDocResponse;
+  await persistRequirement({ ...data, updatedAt: Date.now() });
+  return data;
+}
+
+async function callRecommendComponents(
+  infoItems: InfoItem[],
+  library: ComponentExample[]
+): Promise<RecommendComponentsResponse> {
+  const response = await fetch('/api/recommend-components', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ infoItems, library })
+  });
+  if (!response.ok) {
+    throw new Error(`组件推荐失败 (${response.status})`);
+  }
+  return (await response.json()) as RecommendComponentsResponse;
+}
+
+async function callEnrichLibrary(
+  summaries: {
+    id: string;
+    name: string;
+    primaryColor?: string;
+    sampleText?: string;
+    description?: string;
+    tags?: string[];
+    supportedDataTypes?: DataType[];
+    width: number;
+    height: number;
+    slots?: ComponentSlot[];
+    textPreviews?: SlotCandidate[];
+  }[]
+): Promise<EnrichLibraryResponse> {
+  const response = await fetch('/api/enrich-library', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fileId: FILE_KEY, items: summaries })
+  });
+  if (!response.ok) {
+    throw new Error(`元数据生成失败 (${response.status})`);
+  }
+  return (await response.json()) as EnrichLibraryResponse;
+}
+
+async function handleParseDocument(docText: string) {
+  if (!docText || !docText.trim()) {
+    figma.notify('请输入需求文档文本');
+    return;
+  }
+  try {
+    sendStatus('loading', '正在解析文档');
+    const model = await callParseDocument(docText);
+    sendRequirementToUI();
+    figma.notify('文档解析完成');
+    sendStatus('success');
+  } catch (error) {
+    sendStatus('error', getErrorMessage(error));
+    figma.notify(`解析失败：${getErrorMessage(error)}`);
+  } finally {
+    sendStatus('idle');
+  }
 }

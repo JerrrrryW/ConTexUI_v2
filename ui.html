@@ -54,6 +54,95 @@
         margin-top: 0;
         padding: 4px 8px;
       }
+      .lib-header .right {
+        display: flex;
+        gap: 6px;
+      }
+      .meta-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        margin-top: 4px;
+      }
+      .meta-grid textarea {
+        height: 50px;
+        font-size: 12px;
+      }
+      .tag-input,
+      .meta-input {
+        width: 100%;
+        box-sizing: border-box;
+        font-size: 12px;
+        padding: 4px 6px;
+      }
+      .chip-row {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .chip {
+        border: 1px solid #e5e7eb;
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-size: 11px;
+        background: #f3f4f6;
+        cursor: pointer;
+      }
+      .chip.selected {
+        background: #e0f2fe;
+        border-color: #7dd3fc;
+      }
+      .slot-panel {
+        margin-top: 8px;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        padding: 8px;
+        background: #fff;
+      }
+      .slot-grid {
+        display: grid;
+        grid-template-columns: 1.3fr 140px 140px 180px;
+        gap: 6px;
+        align-items: center;
+      }
+      .slot-header {
+        font-weight: 600;
+        margin-bottom: 6px;
+      }
+      .slot-row {
+        font-size: 12px;
+      }
+      .slot-summary {
+        font-size: 12px;
+        color: #374151;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .slot-hint {
+        font-size: 11px;
+        color: #6b7280;
+        margin: 4px 0;
+      }
+      .slot-filter {
+        width: 100%;
+        box-sizing: border-box;
+        margin: 6px 0;
+        padding: 4px 6px;
+        font-size: 12px;
+      }
+      .badge {
+        display: inline-block;
+        padding: 2px 6px;
+        font-size: 11px;
+        border-radius: 4px;
+        border: 1px solid #e5e7eb;
+        background: #f3f4f6;
+      }
+      .badge.accent {
+        border-color: #7dd3fc;
+        background: #e0f2fe;
+      }
       .lib-list {
         max-height: 180px;
         overflow: auto;
@@ -84,6 +173,43 @@
         min-height: 16px;
         color: #374151;
       }
+      .export-block {
+        margin-top: 6px;
+        display: none;
+      }
+      .export-block textarea {
+        width: 100%;
+        box-sizing: border-box;
+        height: 100px;
+        font-size: 11px;
+      }
+      .section {
+        margin-top: 10px;
+        padding: 8px;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        background: #fafafa;
+      }
+      .section h3 {
+        margin: 0 0 6px 0;
+        font-size: 13px;
+      }
+      .summary {
+        font-size: 11px;
+        color: #6b7280;
+      }
+      .summary span {
+        display: inline-block;
+        margin-right: 8px;
+      }
+      .two-col {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      textarea.small {
+        height: 80px;
+      }
       .status {
         margin-top: 6px;
         min-height: 16px;
@@ -92,54 +218,86 @@
     </style>
   </head>
   <body>
-    <div>
-      <label>OpenAI API Key</label>
-      <input id="key" type="password" placeholder="sk-..." autocomplete="off" />
-    </div>
-
-    <div style="margin-top: 8px">
-      <label>模型提供商</label>
-      <select id="provider">
-        <option value="siliconflow">SiliconFlow（OpenAI兼容）</option>
-        <option value="openai">OpenAI</option>
-        <option value="gemini">Gemini</option>
-      </select>
-    </div>
-
-    <div class="lib">
+    <div class="section">
+      <h3>组件库</h3>
       <div class="lib-header">
-        <span>组件库</span>
         <button id="import">导入选中 Section</button>
+        <div class="right">
+          <button id="enrich">AI 推荐元数据</button>
+          <button id="export">导出 JSON</button>
+        </div>
       </div>
       <div id="library-list" class="lib-list"></div>
+      <div id="exportWrap" class="export-block">
+        <div class="row" style="justify-content: space-between; align-items: center">
+          <span class="summary">已生成 JSON，可复制</span>
+          <button id="copyExport">复制</button>
+        </div>
+        <textarea id="exportText" readonly></textarea>
+      </div>
     </div>
 
-    <div style="margin-top: 8px">
-      <label>指令（自然语言）</label>
-      <textarea
-        id="prompt"
-        rows="4"
-        placeholder="例如：生成一个大号黄色按钮，文字为“开始使用”"
-      ></textarea>
+    <div class="section">
+      <h3>需求文档</h3>
+      <textarea id="docText" class="small" placeholder="粘贴需求文档，用于解析阶段/角色/信息项/页面"></textarea>
+      <div class="row" style="margin-top: 6px; align-items: center">
+        <button id="parseDoc">解析文档</button>
+        <div class="summary" id="reqSummary"></div>
+      </div>
     </div>
 
-    <div class="row" style="align-items: center; margin-top: 8px">
-      <label style="margin: 0; display: flex; align-items: center; gap: 4px">
-        <input id="useLibrary" type="checkbox" checked />
-        生成时参考组件库
-      </label>
-      <button id="run">生成到画布</button>
+    <div class="section">
+      <h3>生成设置</h3>
+      <div class="two-col">
+        <div>
+          <label>模型提供商</label>
+          <select id="provider">
+            <option value="siliconflow">SiliconFlow（OpenAI兼容）</option>
+            <option value="openai">OpenAI</option>
+            <option value="gemini">Gemini</option>
+          </select>
+        </div>
+        <div>
+          <label>指令（自然语言）</label>
+          <textarea
+            id="prompt"
+            rows="3"
+            placeholder="例如：生成“姿态监控-正常飞行”页面"
+          ></textarea>
+        </div>
+      </div>
+      <div class="row" style="align-items: center; margin-top: 8px">
+        <label style="margin: 0; display: flex; align-items: center; gap: 4px">
+          <input id="useLibrary" type="checkbox" checked />
+          生成时参考组件库
+        </label>
+        <button id="run">生成到画布</button>
+      </div>
     </div>
     <div id="status" class="status"></div>
 
     <script>
       const runButton = document.getElementById('run');
       const statusEl = document.getElementById('status');
-      const keyInput = document.getElementById('key');
       const importBtn = document.getElementById('import');
+      const exportBtn = document.getElementById('export');
+      const enrichBtn = document.getElementById('enrich');
       const libraryListEl = document.getElementById('library-list');
       const useLibraryEl = document.getElementById('useLibrary');
+      const docTextEl = document.getElementById('docText');
+      const parseDocBtn = document.getElementById('parseDoc');
+      const reqSummaryEl = document.getElementById('reqSummary');
+      const providerEl = document.getElementById('provider');
+      const promptEl = document.getElementById('prompt');
+      const exportWrap = document.getElementById('exportWrap');
+      const exportText = document.getElementById('exportText');
+      const copyExportBtn = document.getElementById('copyExport');
       let library = [];
+      let requirement = null;
+      let slotState = null;
+      let slotFilter = '';
+      const DATA_TYPES = ['numeric', 'trend', 'alert', 'state', 'text', 'map', 'list'];
+      const SLOT_TYPES = ['label', 'numericValue', 'unit', 'state', 'alert', 'listItem'];
 
       const setLoading = (isLoading) => {
         runButton.disabled = isLoading;
@@ -168,13 +326,83 @@
         library.forEach((item) => {
           const wrapper = document.createElement('div');
           wrapper.className = 'lib-item';
-          const title = document.createElement('div');
-          title.textContent = item.name;
+          const titleRow = document.createElement('div');
+          titleRow.style.display = 'flex';
+          titleRow.style.justifyContent = 'space-between';
+          titleRow.style.alignItems = 'center';
+
+          const nameInput = document.createElement('input');
+          nameInput.className = 'meta-input';
+          nameInput.value = item.name || '';
+          nameInput.placeholder = '组件名称';
+          nameInput.onchange = () => updateComponentMeta(item.id, { name: nameInput.value });
+
+          const actions = document.createElement('div');
+          actions.className = 'lib-actions';
+          const slotBtn = document.createElement('button');
+          slotBtn.textContent = '配置插槽';
+          slotBtn.onclick = () => {
+            parent.postMessage({ pluginMessage: { type: 'request-slots', id: item.id } }, '*');
+          };
+          const removeBtn = document.createElement('button');
+          removeBtn.textContent = '移除';
+          removeBtn.onclick = () => {
+            parent.postMessage({ pluginMessage: { type: 'remove-component', id: item.id } }, '*');
+          };
+          actions.appendChild(slotBtn);
+          actions.appendChild(removeBtn);
+
+          titleRow.appendChild(nameInput);
+          titleRow.appendChild(actions);
+
           const meta = document.createElement('div');
           meta.className = 'lib-meta';
           meta.textContent = `${Math.round(item.width)}x${Math.round(item.height)}${
             item.primaryColor ? ` | 主色:${item.primaryColor}` : ''
           }${item.sampleText ? ` | 文案:${item.sampleText}` : ''}`;
+
+          const metaGrid = document.createElement('div');
+          metaGrid.className = 'meta-grid';
+
+          const desc = document.createElement('textarea');
+          desc.placeholder = '描述';
+          desc.value = item.description || '';
+          desc.onchange = () => updateComponentMeta(item.id, { description: desc.value });
+
+          const tags = document.createElement('input');
+          tags.className = 'tag-input';
+          tags.placeholder = '标签，逗号分隔';
+          tags.value = (item.tags || []).join(', ');
+          tags.onchange = () => {
+            const values = tags.value
+              .split(',')
+              .map((v) => v.trim())
+              .filter(Boolean);
+            updateComponentMeta(item.id, { tags: values });
+          };
+
+          metaGrid.appendChild(desc);
+          metaGrid.appendChild(tags);
+
+          const chipRow = document.createElement('div');
+          chipRow.className = 'chip-row';
+          DATA_TYPES.forEach((dt) => {
+            const chip = document.createElement('div');
+            chip.className = 'chip';
+            chip.textContent = dt;
+            const selected = item.supportedDataTypes?.includes(dt);
+            if (selected) chip.classList.add('selected');
+            chip.onclick = () => {
+              const next = new Set(item.supportedDataTypes || []);
+              if (next.has(dt)) {
+                next.delete(dt);
+              } else {
+                next.add(dt);
+              }
+              updateComponentMeta(item.id, { supportedDataTypes: Array.from(next) });
+            };
+            chipRow.appendChild(chip);
+          });
 
           const note = document.createElement('textarea');
           note.className = 'lib-note';
@@ -188,34 +416,24 @@
             );
           };
 
-          const actions = document.createElement('div');
-          actions.className = 'lib-actions';
-          const removeBtn = document.createElement('button');
-          removeBtn.textContent = '移除';
-          removeBtn.onclick = () => {
-            parent.postMessage({ pluginMessage: { type: 'remove-component', id: item.id } }, '*');
-          };
-          actions.appendChild(removeBtn);
-
-          wrapper.appendChild(title);
+          wrapper.appendChild(titleRow);
           wrapper.appendChild(meta);
+          wrapper.appendChild(metaGrid);
+          const dataTypeLabel = document.createElement('div');
+          dataTypeLabel.className = 'summary';
+          dataTypeLabel.textContent = '支持的数据类型';
+          wrapper.appendChild(dataTypeLabel);
+          wrapper.appendChild(chipRow);
           wrapper.appendChild(note);
-          wrapper.appendChild(actions);
           libraryListEl.appendChild(wrapper);
         });
       };
 
       runButton.onclick = () => {
-        const prompt = document.getElementById('prompt').value;
-        const apiKey = keyInput.value;
-        const provider = document.getElementById('provider').value;
+        const prompt = promptEl.value;
+        const provider = providerEl.value;
         const useLibrary = useLibraryEl.checked;
 
-        try {
-          if (apiKey) localStorage.setItem('ctx-api-key', apiKey);
-        } catch (_error) {
-          // ignore storage errors
-        }
         setLoading(true);
 
         parent.postMessage(
@@ -223,7 +441,7 @@
             pluginMessage: {
               type: 'generate-design',
               prompt,
-              apiKey,
+              apiKey: '', // API Key 交由后端管理
               provider,
               useLibrary
             }
@@ -236,22 +454,50 @@
         parent.postMessage({ pluginMessage: { type: 'import-section' } }, '*');
       };
 
+      exportBtn.onclick = () => {
+        parent.postMessage({ pluginMessage: { type: 'export-library' } }, '*');
+      };
+
+      enrichBtn.onclick = () => {
+        statusEl.textContent = '向 AI 请求元数据推荐…';
+        parent.postMessage({ pluginMessage: { type: 'enrich-library' } }, '*');
+      };
+
+      parseDocBtn.onclick = () => {
+        const docText = docTextEl.value;
+        parent.postMessage({ pluginMessage: { type: 'parse-doc', docText } }, '*');
+      };
+
       useLibraryEl.onchange = () => {
         useLibraryEl.dataset.userToggled = 'true';
       };
 
-      // Load saved key for local testing convenience (stored only on this device).
-      (() => {
-        try {
-          const saved = localStorage.getItem('ctx-api-key');
-          if (saved) keyInput.value = saved;
-        } catch (_error) {
-          // ignore storage errors
+      const updateRequirementSummary = () => {
+        if (!requirement) {
+          reqSummaryEl.textContent = '未解析';
+          return;
         }
-      })();
+        const { phases = [], roles = [], conditions = [], infoItems = [], pages = [] } = requirement;
+        reqSummaryEl.innerHTML = `
+          <span>阶段:${phases.length}</span>
+          <span>角色:${roles.length}</span>
+          <span>条件:${conditions.length}</span>
+          <span>信息项:${infoItems.length}</span>
+          <span>页面:${pages.length}</span>
+        `;
+      };
 
-      // Request library on load
+      copyExportBtn.onclick = () => {
+        if (!exportText.value) return;
+        exportText.select();
+        document.execCommand('copy');
+        statusEl.textContent = '已复制到剪贴板';
+        statusEl.dataset.state = 'success';
+      };
+
+      // Request library & requirement on load
       parent.postMessage({ pluginMessage: { type: 'request-library' } }, '*');
+      parent.postMessage({ pluginMessage: { type: 'request-requirement' } }, '*');
 
       window.onmessage = (event) => {
         const msg = event.data.pluginMessage;
@@ -260,6 +506,44 @@
         if (msg.type === 'library') {
           library = msg.items || [];
           renderLibrary();
+          return;
+        }
+
+        if (msg.type === 'slots') {
+          slotState = {
+            componentId: msg.componentId,
+            candidates: msg.candidates || [],
+            slots: msg.slots || []
+          };
+          renderSlots();
+          return;
+        }
+
+        if (msg.type === 'library-export') {
+          const json = JSON.stringify(msg.data, null, 2);
+          exportText.value = json;
+          exportWrap.style.display = 'block';
+          try {
+            if (navigator.clipboard) {
+              navigator.clipboard.writeText(json).catch(() => {});
+            }
+          } catch (_error) {
+            // ignore clipboard errors
+          }
+          statusEl.textContent = '已导出组件库 JSON，下方可复制';
+          statusEl.dataset.state = 'success';
+          return;
+        }
+
+        if (msg.type === 'library-enriched') {
+          statusEl.textContent = `已应用 ${msg.applied || 0} 个组件的推荐`;
+          statusEl.dataset.state = 'success';
+          return;
+        }
+
+        if (msg.type === 'requirement') {
+          requirement = msg.data;
+          updateRequirementSummary();
           return;
         }
 
@@ -287,6 +571,160 @@
             statusEl.textContent = '';
           }
         }
+      };
+
+      const renderSlots = () => {
+        const panelId = 'slotPanel';
+        let panel = document.getElementById(panelId);
+        if (!slotState) {
+          if (panel) panel.remove();
+          return;
+        }
+        if (!panel) {
+          panel = document.createElement('div');
+          panel.id = panelId;
+          panel.className = 'slot-panel';
+          libraryListEl.parentNode.appendChild(panel);
+        }
+        panel.innerHTML = '';
+
+        const header = document.createElement('div');
+        header.className = 'slot-header';
+        const comp = library.find((c) => c.id === slotState.componentId);
+        header.textContent = `插槽配置：${comp?.name || slotState.componentId}`;
+        panel.appendChild(header);
+
+        const summary = document.createElement('div');
+        summary.className = 'slot-summary';
+        const configuredCount = slotState.slots?.length || 0;
+        summary.innerHTML = `<span class="badge accent">已配置 ${configuredCount}</span><span class="badge">候选 ${slotState.candidates.length}</span>`;
+        panel.appendChild(summary);
+
+        const hint = document.createElement('div');
+        hint.className = 'slot-hint';
+        hint.innerHTML = '请选择 slot 类型和数据类型，常用搭配：label + text / numericValue + unit / state / alert / listItem。';
+        panel.appendChild(hint);
+
+        const filterInput = document.createElement('input');
+        filterInput.className = 'slot-filter';
+        filterInput.placeholder = '筛选节点名称或文案（回车应用）';
+        filterInput.value = slotFilter;
+        filterInput.onchange = () => {
+          slotFilter = filterInput.value.trim().toLowerCase();
+          renderSlots();
+        };
+        panel.appendChild(filterInput);
+
+        const grid = document.createElement('div');
+        grid.className = 'slot-grid';
+
+        const candidates = slotState.candidates
+          .slice()
+          .sort((a, b) => {
+            const aSet = (slotState.slots || []).some((s) => s.nodeId === a.id);
+            const bSet = (slotState.slots || []).some((s) => s.nodeId === b.id);
+            if (aSet && !bSet) return -1;
+            if (!aSet && bSet) return 1;
+            return (a.name || '').localeCompare(b.name || '');
+          })
+          .filter((cand) => {
+            if (!slotFilter) return true;
+            const text = `${cand.name} ${cand.preview || ''}`.toLowerCase();
+            return text.includes(slotFilter);
+          });
+
+        const rows = candidates.map((cand) => {
+          const row = document.createElement('div');
+          row.className = 'slot-row';
+          row.style.display = 'contents';
+
+          const label = document.createElement('div');
+          label.textContent = `${cand.name} (${cand.type}) ${cand.preview ? '· ' + cand.preview : ''}`;
+
+          const slotType = document.createElement('select');
+          const emptyOpt = document.createElement('option');
+          emptyOpt.value = '';
+          emptyOpt.textContent = '不使用';
+          slotType.appendChild(emptyOpt);
+          SLOT_TYPES.forEach((st) => {
+            const opt = document.createElement('option');
+            opt.value = st;
+            opt.textContent = st;
+            slotType.appendChild(opt);
+          });
+
+          const dataTypeSelect = document.createElement('select');
+          const emptyDt = document.createElement('option');
+          emptyDt.value = '';
+          emptyDt.textContent = '默认';
+          dataTypeSelect.appendChild(emptyDt);
+          DATA_TYPES.forEach((dt) => {
+            const opt = document.createElement('option');
+            opt.value = dt;
+            opt.textContent = dt;
+            dataTypeSelect.appendChild(opt);
+          });
+
+          const slotName = document.createElement('input');
+          slotName.className = 'meta-input';
+          slotName.placeholder = 'slot 名称';
+
+          const existing = (slotState.slots || []).find((s) => s.nodeId === cand.id);
+          if (existing) {
+            slotType.value = existing.slotType || '';
+            dataTypeSelect.value = existing.dataType || '';
+            slotName.value = existing.slotName || cand.name;
+          } else {
+            slotName.value = cand.name;
+          }
+
+          row.appendChild(label);
+          row.appendChild(slotType);
+          row.appendChild(dataTypeSelect);
+          row.appendChild(slotName);
+
+          return { row, slotType, dataTypeSelect, slotName, cand };
+        });
+
+        rows.forEach((r) => {
+          grid.appendChild(r.row);
+        });
+        panel.appendChild(grid);
+
+        const actions = document.createElement('div');
+        actions.className = 'row';
+        actions.style.justifyContent = 'space-between';
+        actions.style.marginTop = '8px';
+        const resetBtn = document.createElement('button');
+        resetBtn.textContent = '清空选择';
+        resetBtn.onclick = () => {
+          slotState.slots = [];
+          renderSlots();
+        };
+        const saveBtn = document.createElement('button');
+        saveBtn.textContent = '保存插槽';
+        saveBtn.onclick = () => {
+          const slots = rows
+            .map((r) => {
+              if (!r.slotType.value) return null;
+              return {
+                slotName: r.slotName.value || r.cand.name,
+                nodeId: r.cand.id,
+                slotType: r.slotType.value,
+                dataType: r.dataTypeSelect.value || undefined
+              };
+            })
+            .filter(Boolean);
+          parent.postMessage(
+            { pluginMessage: { type: 'save-slots', id: slotState.componentId, slots } },
+            '*'
+          );
+          slotState.slots = slots;
+          renderSlots();
+        };
+        actions.appendChild(resetBtn);
+        actions.appendChild(saveBtn);
+        panel.appendChild(actions);
       };
     </script>
   </body>
