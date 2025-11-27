@@ -10,10 +10,31 @@ type GenerateDesignMessage = {
   prompt: string;
   apiKey: string;
   provider: Provider;
+  useLibrary?: boolean;
+};
+type ImportMessage = { type: 'import-section' };
+type RequestLibraryMessage = { type: 'request-library' };
+type UpdateNoteMessage = { type: 'update-note'; id: string; note: string };
+type RemoveComponentMessage = { type: 'remove-component'; id: string };
+type PluginMessage =
+  | GenerateDesignMessage
+  | ImportMessage
+  | RequestLibraryMessage
+  | UpdateNoteMessage
+  | RemoveComponentMessage;
+
+type ComponentExample = {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  primaryColor?: string;
+  sampleText?: string;
+  note?: string;
 };
 
 type LayerSpec = {
-  type: 'text' | 'button' | 'input' | 'rectangle';
+  type: 'text' | 'button' | 'input' | 'rectangle' | 'component';
   label?: string;
   placeholder?: string;
   width?: number;
@@ -23,6 +44,9 @@ type LayerSpec = {
   background?: string;
   align?: 'left' | 'center' | 'right';
   cornerRadius?: number;
+  componentId?: string;
+  componentName?: string;
+  note?: string;
 };
 
 type UISpec = {
@@ -48,15 +72,40 @@ const FALLBACK_FONT: FontName = { family: 'Roboto', style: 'Regular' };
 const DEFAULT_BACKGROUND = '#F7F9FC';
 const DEFAULT_TEXT_COLOR = '#111827';
 let activeFont: FontName = DEFAULT_FONT;
+const LIBRARY_KEY = 'ctx-component-library';
+let componentLibrary: ComponentExample[] = [];
 
 figma.showUI(__html__, { width: 340, height: 320 });
 
-figma.ui.onmessage = async (msg: GenerateDesignMessage) => {
+initializeLibrary();
+
+figma.ui.onmessage = async (msg: PluginMessage) => {
+  if (msg.type === 'import-section') {
+    await importSelectedSection();
+    return;
+  }
+
+  if (msg.type === 'request-library') {
+    sendLibraryToUI();
+    return;
+  }
+
+  if (msg.type === 'update-note') {
+    await updateNote(msg.id, msg.note);
+    return;
+  }
+
+  if (msg.type === 'remove-component') {
+    await removeComponent(msg.id);
+    return;
+  }
+
   if (msg.type !== 'generate-design') return;
 
   const prompt = msg.prompt?.trim();
   const apiKey = msg.apiKey?.trim();
   const provider: Provider = msg.provider || 'openai';
+  const useLibrary = msg.useLibrary ?? false;
 
   if (!prompt) {
     figma.notify('请输入指令');
@@ -71,9 +120,11 @@ figma.ui.onmessage = async (msg: GenerateDesignMessage) => {
   try {
     sendStatus('loading');
     figma.notify('正在向模型请求设计…');
-    const spec = await fetchDesignSpec(prompt, apiKey, provider);
+    const libraryContext = useLibrary ? buildLibraryContext(componentLibrary) : '';
+    const spec = await fetchDesignSpec(prompt, apiKey, provider, libraryContext);
     await loadFonts();
-    const frame = buildUiFromSpec(spec);
+    const componentMap = useLibrary ? await loadComponentNodes(spec.layers) : new Map();
+    const frame = buildUiFromSpec(spec, componentMap);
     figma.currentPage.selection = [frame];
     figma.viewport.scrollAndZoomIntoView([frame]);
     sendStatus('success');
@@ -86,45 +137,103 @@ figma.ui.onmessage = async (msg: GenerateDesignMessage) => {
   }
 };
 
-async function fetchDesignSpec(prompt: string, apiKey: string, provider: Provider): Promise<UISpec> {
+async function initializeLibrary() {
+  try {
+    const saved = await figma.clientStorage.getAsync(LIBRARY_KEY);
+    if (Array.isArray(saved)) {
+      componentLibrary = saved as ComponentExample[];
+    }
+  } catch (_error) {
+    componentLibrary = [];
+  }
+  sendLibraryToUI();
+}
+
+function sendLibraryToUI() {
+  figma.ui.postMessage({ type: 'library', items: componentLibrary });
+}
+
+async function persistLibrary() {
+  try {
+    await figma.clientStorage.setAsync(LIBRARY_KEY, componentLibrary);
+  } catch (_error) {
+    // ignore storage errors
+  }
+  sendLibraryToUI();
+}
+
+async function importSelectedSection() {
+  const selection = figma.currentPage.selection;
+  const section = selection.find((node) => node.type === 'SECTION') as SectionNode | undefined;
+
+  if (!section) {
+    figma.notify('请先选中一个 Section');
+    sendStatus('error', '请先选中一个 Section');
+    return;
+  }
+
+  const frames = section.children.filter((child) => child.type === 'FRAME') as FrameNode[];
+
+  if (!frames.length) {
+    figma.notify('Section 下没有 Frame 可导入');
+    return;
+  }
+
+  componentLibrary = frames.map(toComponentExample);
+  await persistLibrary();
+  figma.notify(`已导入 ${componentLibrary.length} 个组件`);
+}
+
+async function updateNote(id: string, note: string) {
+  const target = componentLibrary.find((item) => item.id === id);
+  if (!target) return;
+  target.note = note;
+  await persistLibrary();
+}
+
+async function removeComponent(id: string) {
+  const next = componentLibrary.filter((item) => item.id !== id);
+  if (next.length === componentLibrary.length) return;
+  componentLibrary = next;
+  await persistLibrary();
+}
+
+function toComponentExample(frame: FrameNode): ComponentExample {
+  const texts = collectTexts(frame);
+  return {
+    id: frame.id,
+    name: frame.name || '组件',
+    width: frame.width,
+    height: frame.height,
+    primaryColor: getPrimaryFill(frame),
+    sampleText: texts[0],
+    note: ''
+  };
+}
+
+async function fetchDesignSpec(
+  prompt: string,
+  apiKey: string,
+  provider: Provider,
+  libraryContext: string
+): Promise<UISpec> {
   if (provider === 'gemini') {
-    return fetchGeminiSpec(prompt, apiKey);
+    return fetchGeminiSpec(prompt, apiKey, libraryContext);
   }
 
   const config = provider === 'openai' ? PROVIDERS.openai : PROVIDERS.siliconflow;
-  return fetchOpenAICompatSpec(prompt, apiKey, config.baseUrl, config.model);
+  return fetchOpenAICompatSpec(prompt, apiKey, config.baseUrl, config.model, libraryContext);
 }
 
 async function fetchOpenAICompatSpec(
   prompt: string,
   apiKey: string,
   baseUrl: string,
-  model: string
+  model: string,
+  libraryContext: string
 ): Promise<UISpec> {
-  const systemPrompt = `
-You are a product designer who outputs compact JSON for a small layout (3-6 layers).
-Use this shape:
-{
-  "title": "short screen name",
-  "background": "#F7F9FC",
-  "padding": 24,
-  "spacing": 12,
-  "layers": [
-    {
-      "type": "text|button|input|rectangle",
-      "label": "content for the component",
-      "placeholder": "only for input",
-      "width": 280,
-      "height": 48,
-      "size": 16,
-      "color": "#111827",
-      "background": "#FACC15",
-      "cornerRadius": 12,
-      "align": "center"
-    }
-  ]
-}
-Numbers only, hex colors, no Markdown — respond with JSON only.`;
+  const systemPrompt = buildSystemPrompt(libraryContext);
+  const userPrompt = prompt;
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -138,7 +247,7 @@ Numbers only, hex colors, no Markdown — respond with JSON only.`;
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt }
+        { role: 'user', content: userPrompt }
       ]
     })
   });
@@ -165,12 +274,10 @@ Numbers only, hex colors, no Markdown — respond with JSON only.`;
   return normalizeSpec(parsed);
 }
 
-async function fetchGeminiSpec(prompt: string, apiKey: string): Promise<UISpec> {
+async function fetchGeminiSpec(prompt: string, apiKey: string, libraryContext: string): Promise<UISpec> {
   const { baseUrl, model } = PROVIDERS.gemini;
-  const systemPrompt = `
-You are a product designer who outputs compact JSON for a small layout (3-6 layers).
-Use the schema described earlier. Numbers only, hex colors, no Markdown — respond with JSON only.
-`;
+  const systemPrompt = buildSystemPrompt(libraryContext);
+  const userPrompt = prompt;
 
   const url = `${baseUrl}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const response = await fetch(url, {
@@ -178,7 +285,7 @@ Use the schema described earlier. Numbers only, hex colors, no Markdown — resp
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system_instruction: { parts: [{ text: systemPrompt }] },
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: [{ parts: [{ text: userPrompt }] }],
       generationConfig: { temperature: 0.6 }
     })
   });
@@ -206,6 +313,56 @@ Use the schema described earlier. Numbers only, hex colors, no Markdown — resp
   }
 
   return normalizeSpec(parsed);
+}
+
+function buildSystemPrompt(libraryContext: string): string {
+  if (!libraryContext) {
+    return `You are a product designer who outputs compact JSON for a small layout (3-6 layers).
+Use this shape:
+{
+  "title": "short screen name",
+  "background": "#F7F9FC",
+  "padding": 24,
+  "spacing": 12,
+  "layers": [
+    {
+      "type": "text|button|input|rectangle",
+      "label": "content for the component",
+      "placeholder": "only for input",
+      "width": 280,
+      "height": 48,
+      "size": 16,
+      "color": "#111827",
+      "background": "#FACC15",
+      "cornerRadius": 12,
+      "align": "center"
+    }
+  ]
+}
+Numbers only, hex colors, no Markdown — respond with JSON only.`;
+  }
+
+  return `You are a layout planner who must ONLY place existing components from a library.
+Library inventory (id, name, size, color, note, sample text):
+${libraryContext}
+
+Rules:
+- Output 3-8 layers, type must be "component" only (no rectangles/text/buttons/inputs).
+- Reuse components exactly as-is; do NOT change colors, sizing, or internal structure.
+- You only decide which component to use, how many times, and layout order/stacking.
+- If text copy needs to differ, keep the component unchanged and add a short "note" to describe the change (e.g., "标题改为 对地速度").
+- Prefer componentId when referencing; include componentName too for clarity.
+- Respond with JSON only, no Markdown.
+
+Shape:
+{
+  "title": "screen name",
+  "padding": 24,
+  "spacing": 12,
+  "layers": [
+    { "type": "component", "componentId": "id-from-library", "componentName": "name", "note": "optional text tweak" }
+  ]
+}`;
 }
 
 function safeJsonParse<T>(value: string): T {
@@ -257,7 +414,7 @@ async function loadFonts() {
   }
 }
 
-function buildUiFromSpec(spec: UISpec): FrameNode {
+function buildUiFromSpec(spec: UISpec, componentMap: Map<string, SceneNode>): FrameNode {
   const frame = figma.createFrame();
   frame.name = spec.title ?? 'LLM UI';
   frame.layoutMode = 'VERTICAL';
@@ -272,7 +429,7 @@ function buildUiFromSpec(spec: UISpec): FrameNode {
   frame.fills = [{ type: 'SOLID', color: hexToRgb(spec.background || DEFAULT_BACKGROUND) }];
 
   spec.layers.forEach((layer) => {
-    const node = createLayerNode(layer);
+    const node = createLayerNode(layer, componentMap);
     frame.appendChild(node);
   });
 
@@ -280,8 +437,10 @@ function buildUiFromSpec(spec: UISpec): FrameNode {
   return frame;
 }
 
-function createLayerNode(layer: LayerSpec): SceneNode {
+function createLayerNode(layer: LayerSpec, componentMap: Map<string, SceneNode>): SceneNode {
   switch (layer.type) {
+    case 'component':
+      return createComponentNode(layer, componentMap);
     case 'button':
       return createButton(layer);
     case 'input':
@@ -403,6 +562,135 @@ function createRectangle(layer: LayerSpec): RectangleNode {
   return rect;
 }
 
+function createComponentNode(layer: LayerSpec, componentMap: Map<string, SceneNode>): SceneNode {
+  const sourceId =
+    layer.componentId || findComponentIdByName(layer.componentName || layer.label || '');
+  if (sourceId) {
+    const source = componentMap.get(sourceId);
+    if (source && 'clone' in source) {
+      const clone = (source as SceneNode).clone();
+      const name = layer.componentName || layer.label || clone.name;
+      clone.name = layer.note ? `${name}【${layer.note}】` : name;
+      if ('layoutAlign' in clone) {
+        (clone as LayoutMixin).layoutAlign = 'STRETCH';
+      }
+      if ('x' in clone) {
+        (clone as BaseNodeMixin & SceneNode).x = 0;
+        (clone as BaseNodeMixin & SceneNode).y = 0;
+      }
+      return clone;
+    }
+  }
+
+  const fallback = figma.createFrame();
+  fallback.name = layer.componentName || layer.label || '组件占位';
+  fallback.layoutMode = 'VERTICAL';
+  fallback.primaryAxisSizingMode = 'AUTO';
+  fallback.counterAxisSizingMode = 'AUTO';
+  fallback.paddingLeft = 12;
+  fallback.paddingRight = 12;
+  fallback.paddingTop = 12;
+  fallback.paddingBottom = 12;
+  fallback.itemSpacing = 6;
+  fallback.strokes = [{ type: 'SOLID', color: hexToRgb('#F59E0B') }];
+  fallback.strokeWeight = 1;
+  fallback.fills = [{ type: 'SOLID', color: hexToRgb('#FFF7ED') }];
+
+  const title = createTextNode({
+    type: 'text',
+    label: `未找到组件: ${layer.componentName || layer.label || '未知'}`,
+    color: '#9A3412',
+    size: 12
+  });
+
+  const noteText = layer.note
+    ? createTextNode({
+        type: 'text',
+        label: `备注: ${layer.note}`,
+        color: '#9A3412',
+        size: 11
+      })
+    : null;
+
+  fallback.appendChild(title);
+  if (noteText) fallback.appendChild(noteText);
+
+  return fallback;
+}
+
+function collectTexts(node: SceneNode): string[] {
+  const result: string[] = [];
+  if (node.type === 'TEXT') {
+    result.push((node as TextNode).characters);
+  }
+  if ('children' in node) {
+    for (const child of (node as ChildrenMixin).children) {
+      result.push(...collectTexts(child as SceneNode));
+    }
+  }
+  return result;
+}
+
+function getPrimaryFill(node: FrameNode): string | undefined {
+  const fills = Array.isArray(node.fills) ? (node.fills as Paint[]) : [];
+  const solid = fills.find((paint) => paint.type === 'SOLID' && (paint as SolidPaint).visible !== false);
+  if (solid && solid.type === 'SOLID') {
+    return rgbToHex(solid.color);
+  }
+  return undefined;
+}
+
+function findComponentIdByName(name: string): string | undefined {
+  if (!name) return undefined;
+  const target = componentLibrary.find(
+    (item) => item.name.toLowerCase() === name.toLowerCase()
+  );
+  return target?.id;
+}
+
+function buildLibraryContext(items: ComponentExample[]): string {
+  if (!items.length) return '';
+  return items
+    .slice(0, 12)
+    .map((item) => {
+      const parts = [
+        `id:${item.id}`,
+        `名称:${item.name}`,
+        `尺寸:${Math.round(item.width)}x${Math.round(item.height)}`
+      ];
+      if (item.primaryColor) parts.push(`主色:${item.primaryColor}`);
+      if (item.sampleText) parts.push(`文案:${item.sampleText}`);
+      if (item.note) parts.push(`备注:${item.note}`);
+      return parts.join(' | ');
+    })
+    .join('\n');
+}
+
+async function loadComponentNodes(layers: LayerSpec[]): Promise<Map<string, SceneNode>> {
+  const componentMap = new Map<string, SceneNode>();
+  const ids = new Set<string>();
+
+  layers.forEach((layer) => {
+    if (layer.type !== 'component') return;
+    if (layer.componentId) {
+      ids.add(layer.componentId);
+    } else {
+      const found = findComponentIdByName(layer.componentName || layer.label || '');
+      if (found) ids.add(found);
+    }
+  });
+
+  const tasks = Array.from(ids).map(async (id) => {
+    const node = await figma.getNodeByIdAsync(id);
+    if (node && 'clone' in node) {
+      componentMap.set(id, node as SceneNode);
+    }
+  });
+
+  await Promise.all(tasks);
+  return componentMap;
+}
+
 function hexToRgb(hex: string): RGB {
   const sanitized = hex.replace('#', '');
   const full = sanitized.length === 3
@@ -419,6 +707,17 @@ function hexToRgb(hex: string): RGB {
     g: ((value >> 8) & 255) / 255,
     b: (value & 255) / 255
   };
+}
+
+function rgbToHex(color: RGB | RGBA): string {
+  const r = Math.max(0, Math.min(255, Math.round(color.r * 255)));
+  const g = Math.max(0, Math.min(255, Math.round(color.g * 255)));
+  const b = Math.max(0, Math.min(255, Math.round(color.b * 255)));
+  const toHex = (v: number) => {
+    const hex = v.toString(16);
+    return hex.length === 1 ? `0${hex}` : hex;
+  };
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`.toUpperCase();
 }
 
 function getErrorMessage(error: unknown): string {

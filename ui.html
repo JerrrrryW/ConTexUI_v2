@@ -27,6 +27,63 @@
         width: 100%;
         padding: 6px 0;
       }
+      .row {
+        display: flex;
+        gap: 8px;
+      }
+      .row button {
+        width: auto;
+        margin-top: 0;
+      }
+      .lib {
+        margin-top: 8px;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        padding: 8px;
+        background: #fafafa;
+      }
+      .lib-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 4px;
+        font-weight: 600;
+      }
+      .lib-header button {
+        width: auto;
+        margin-top: 0;
+        padding: 4px 8px;
+      }
+      .lib-list {
+        max-height: 180px;
+        overflow: auto;
+        display: grid;
+        gap: 6px;
+      }
+      .lib-item {
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        padding: 6px;
+        background: #fff;
+      }
+      .lib-meta {
+        font-size: 11px;
+        color: #6b7280;
+        margin-top: 2px;
+      }
+      .lib-note {
+        margin-top: 4px;
+        font-size: 12px;
+        width: 100%;
+      }
+      .lib-actions {
+        text-align: right;
+      }
+      .status {
+        margin-top: 6px;
+        min-height: 16px;
+        color: #374151;
+      }
       .status {
         margin-top: 6px;
         min-height: 16px;
@@ -37,7 +94,7 @@
   <body>
     <div>
       <label>OpenAI API Key</label>
-      <input id="key" type="password" placeholder="sk-..."/>
+      <input id="key" type="password" placeholder="sk-..." autocomplete="off" />
     </div>
 
     <div style="margin-top: 8px">
@@ -49,6 +106,14 @@
       </select>
     </div>
 
+    <div class="lib">
+      <div class="lib-header">
+        <span>组件库</span>
+        <button id="import">导入选中 Section</button>
+      </div>
+      <div id="library-list" class="lib-list"></div>
+    </div>
+
     <div style="margin-top: 8px">
       <label>指令（自然语言）</label>
       <textarea
@@ -58,12 +123,23 @@
       ></textarea>
     </div>
 
-    <button id="run">生成到画布</button>
+    <div class="row" style="align-items: center; margin-top: 8px">
+      <label style="margin: 0; display: flex; align-items: center; gap: 4px">
+        <input id="useLibrary" type="checkbox" checked />
+        生成时参考组件库
+      </label>
+      <button id="run">生成到画布</button>
+    </div>
     <div id="status" class="status"></div>
 
     <script>
       const runButton = document.getElementById('run');
       const statusEl = document.getElementById('status');
+      const keyInput = document.getElementById('key');
+      const importBtn = document.getElementById('import');
+      const libraryListEl = document.getElementById('library-list');
+      const useLibraryEl = document.getElementById('useLibrary');
+      let library = [];
 
       const setLoading = (isLoading) => {
         runButton.disabled = isLoading;
@@ -76,10 +152,70 @@
         statusEl.dataset.state = isLoading ? 'loading' : statusEl.dataset.state;
       };
 
+      const renderLibrary = () => {
+        libraryListEl.innerHTML = '';
+        if (!library.length) {
+          libraryListEl.textContent = '暂无组件，选中 Section 后点击“导入”';
+          useLibraryEl.checked = false;
+          useLibraryEl.disabled = true;
+          return;
+        }
+        useLibraryEl.disabled = false;
+        if (useLibraryEl.dataset.userToggled !== 'true') {
+          useLibraryEl.checked = true;
+        }
+
+        library.forEach((item) => {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'lib-item';
+          const title = document.createElement('div');
+          title.textContent = item.name;
+          const meta = document.createElement('div');
+          meta.className = 'lib-meta';
+          meta.textContent = `${Math.round(item.width)}x${Math.round(item.height)}${
+            item.primaryColor ? ` | 主色:${item.primaryColor}` : ''
+          }${item.sampleText ? ` | 文案:${item.sampleText}` : ''}`;
+
+          const note = document.createElement('textarea');
+          note.className = 'lib-note';
+          note.rows = 2;
+          note.placeholder = '备注 / 用途说明';
+          note.value = item.note || '';
+          note.onchange = () => {
+            parent.postMessage(
+              { pluginMessage: { type: 'update-note', id: item.id, note: note.value } },
+              '*'
+            );
+          };
+
+          const actions = document.createElement('div');
+          actions.className = 'lib-actions';
+          const removeBtn = document.createElement('button');
+          removeBtn.textContent = '移除';
+          removeBtn.onclick = () => {
+            parent.postMessage({ pluginMessage: { type: 'remove-component', id: item.id } }, '*');
+          };
+          actions.appendChild(removeBtn);
+
+          wrapper.appendChild(title);
+          wrapper.appendChild(meta);
+          wrapper.appendChild(note);
+          wrapper.appendChild(actions);
+          libraryListEl.appendChild(wrapper);
+        });
+      };
+
       runButton.onclick = () => {
         const prompt = document.getElementById('prompt').value;
-        const apiKey = document.getElementById('key').value;
+        const apiKey = keyInput.value;
         const provider = document.getElementById('provider').value;
+        const useLibrary = useLibraryEl.checked;
+
+        try {
+          if (apiKey) localStorage.setItem('ctx-api-key', apiKey);
+        } catch (_error) {
+          // ignore storage errors
+        }
         setLoading(true);
 
         parent.postMessage(
@@ -88,38 +224,68 @@
               type: 'generate-design',
               prompt,
               apiKey,
-              provider
+              provider,
+              useLibrary
             }
           },
           '*'
         );
       };
 
+      importBtn.onclick = () => {
+        parent.postMessage({ pluginMessage: { type: 'import-section' } }, '*');
+      };
+
+      useLibraryEl.onchange = () => {
+        useLibraryEl.dataset.userToggled = 'true';
+      };
+
+      // Load saved key for local testing convenience (stored only on this device).
+      (() => {
+        try {
+          const saved = localStorage.getItem('ctx-api-key');
+          if (saved) keyInput.value = saved;
+        } catch (_error) {
+          // ignore storage errors
+        }
+      })();
+
+      // Request library on load
+      parent.postMessage({ pluginMessage: { type: 'request-library' } }, '*');
+
       window.onmessage = (event) => {
         const msg = event.data.pluginMessage;
-        if (!msg || msg.type !== 'status') return;
+        if (!msg) return;
 
-        if (msg.state === 'loading') {
-          setLoading(true);
-        } else {
-          setLoading(false);
+        if (msg.type === 'library') {
+          library = msg.items || [];
+          renderLibrary();
+          return;
         }
 
-        if (msg.state === 'error') {
-          statusEl.dataset.state = 'error';
-          statusEl.textContent = `错误：${msg.message || '生成失败'}`;
-        } else if (msg.state === 'success') {
-          statusEl.dataset.state = 'success';
-          statusEl.textContent = '生成完成';
-          setTimeout(() => {
-            if (statusEl.dataset.state === 'success') {
-              statusEl.textContent = '';
-              statusEl.dataset.state = '';
-            }
-          }, 1500);
-        } else if (msg.state === 'idle' && statusEl.dataset.state !== 'error') {
-          statusEl.dataset.state = '';
-          statusEl.textContent = '';
+        if (msg.type === 'status') {
+          if (msg.state === 'loading') {
+            setLoading(true);
+          } else {
+            setLoading(false);
+          }
+
+          if (msg.state === 'error') {
+            statusEl.dataset.state = 'error';
+            statusEl.textContent = `错误：${msg.message || '生成失败'}`;
+          } else if (msg.state === 'success') {
+            statusEl.dataset.state = 'success';
+            statusEl.textContent = '生成完成';
+            setTimeout(() => {
+              if (statusEl.dataset.state === 'success') {
+                statusEl.textContent = '';
+                statusEl.dataset.state = '';
+              }
+            }, 1500);
+          } else if (msg.state === 'idle' && statusEl.dataset.state !== 'error') {
+            statusEl.dataset.state = '';
+            statusEl.textContent = '';
+          }
         }
       };
     </script>
