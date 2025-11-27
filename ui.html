@@ -15,6 +15,7 @@
         font-weight: 600;
       }
       input,
+      select,
       textarea {
         width: 100%;
         box-sizing: border-box;
@@ -26,12 +27,26 @@
         width: 100%;
         padding: 6px 0;
       }
+      .status {
+        margin-top: 6px;
+        min-height: 16px;
+        color: #374151;
+      }
     </style>
   </head>
   <body>
     <div>
       <label>OpenAI API Key</label>
-      <input id="key" type="password" placeholder="sk-..." />
+      <input id="key" type="password" placeholder="sk-..."/>
+    </div>
+
+    <div style="margin-top: 8px">
+      <label>模型提供商</label>
+      <select id="provider">
+        <option value="siliconflow">SiliconFlow（OpenAI兼容）</option>
+        <option value="openai">OpenAI</option>
+        <option value="gemini">Gemini</option>
+      </select>
     </div>
 
     <div style="margin-top: 8px">
@@ -44,24 +59,68 @@
     </div>
 
     <button id="run">生成到画布</button>
+    <div id="status" class="status"></div>
 
     <script>
       const runButton = document.getElementById('run');
+      const statusEl = document.getElementById('status');
+
+      const setLoading = (isLoading) => {
+        runButton.disabled = isLoading;
+        runButton.textContent = isLoading ? '生成中…' : '生成到画布';
+        if (isLoading) {
+          statusEl.textContent = '正在生成，请稍候…';
+        } else if (statusEl.dataset.state !== 'success') {
+          statusEl.textContent = '';
+        }
+        statusEl.dataset.state = isLoading ? 'loading' : statusEl.dataset.state;
+      };
 
       runButton.onclick = () => {
         const prompt = document.getElementById('prompt').value;
         const apiKey = document.getElementById('key').value;
+        const provider = document.getElementById('provider').value;
+        setLoading(true);
 
         parent.postMessage(
           {
             pluginMessage: {
               type: 'generate-design',
               prompt,
-              apiKey
+              apiKey,
+              provider
             }
           },
           '*'
         );
+      };
+
+      window.onmessage = (event) => {
+        const msg = event.data.pluginMessage;
+        if (!msg || msg.type !== 'status') return;
+
+        if (msg.state === 'loading') {
+          setLoading(true);
+        } else {
+          setLoading(false);
+        }
+
+        if (msg.state === 'error') {
+          statusEl.dataset.state = 'error';
+          statusEl.textContent = `错误：${msg.message || '生成失败'}`;
+        } else if (msg.state === 'success') {
+          statusEl.dataset.state = 'success';
+          statusEl.textContent = '生成完成';
+          setTimeout(() => {
+            if (statusEl.dataset.state === 'success') {
+              statusEl.textContent = '';
+              statusEl.dataset.state = '';
+            }
+          }, 1500);
+        } else if (msg.state === 'idle' && statusEl.dataset.state !== 'error') {
+          statusEl.dataset.state = '';
+          statusEl.textContent = '';
+        }
       };
     </script>
   </body>

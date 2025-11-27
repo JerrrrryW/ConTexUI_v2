@@ -12,7 +12,9 @@
   "ui": "ui.html",
   "networkAccess": {
     "allowedDomains": [
-      "none"
+      "https://api.openai.com",
+      "https://api.siliconflow.cn",
+      "https://generativelanguage.googleapis.com"
     ]
   }
 }
