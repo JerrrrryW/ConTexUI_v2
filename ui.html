@@ -214,7 +214,7 @@
       }
       .priority-row {
         display: grid;
-        grid-template-columns: 48px 80px 1fr;
+        grid-template-columns: 48px 80px 1fr 1fr;
         gap: 6px;
         align-items: center;
         padding: 4px 0;
@@ -308,6 +308,17 @@
         <div>
           <div class="summary">页面列表</div>
           <div id="pageList" class="req-list"></div>
+          <div class="summary" style="margin-top: 6px">可多选页面</div>
+          <div style="margin-top: 6px">
+            <label>布局模板</label>
+            <select id="templateSelect" style="width: 100%; padding: 4px 6px; font-size: 12px;">
+              <option value="two-col">双列</option>
+              <option value="three-col">三列</option>
+              <option value="main-side">主+侧</option>
+              <option value="dashboard">仪表盘</option>
+            </select>
+          </div>
+          <button id="generatePages" style="margin-top: 6px">生成所选页面</button>
         </div>
         <div>
           <div class="summary">信息项优先级（选中页面）</div>
@@ -374,11 +385,14 @@
       const pageInfoEl = document.getElementById('pageInfo');
       const saveReqBtn = document.getElementById('saveRequirement');
       const recommendBtn = document.getElementById('recommendBindings');
+      const templateSelect = document.getElementById('templateSelect');
+      const generatePagesBtn = document.getElementById('generatePages');
       let library = [];
       let requirement = null;
       let slotState = null;
       let slotFilter = '';
       let selectedPageId = null;
+      const selectedPageIds = new Set();
       const DATA_TYPES = ['numeric', 'trend', 'alert', 'state', 'text', 'map', 'list'];
       const SLOT_TYPES = ['label', 'numericValue', 'unit', 'state', 'alert', 'listItem'];
 
@@ -568,11 +582,26 @@
         parent.postMessage({ pluginMessage: { type: 'recommend-bindings', pageId: selectedPageId } }, '*');
       };
 
+      generatePagesBtn.onclick = () => {
+        if (!selectedPageIds.size) {
+          statusEl.textContent = '请选择至少一个页面';
+          statusEl.dataset.state = 'error';
+          return;
+        }
+        const pageIds = Array.from(selectedPageIds);
+        const template = templateSelect.value || 'two-col';
+        parent.postMessage({
+          pluginMessage: { type: 'generate-pages', pageIds, template, useLibrary: true }
+        }, '*');
+        statusEl.textContent = `生成 ${pageIds.length} 个页面中…`;
+        statusEl.dataset.state = 'loading';
+      };
+
       useLibraryEl.onchange = () => {
         useLibraryEl.dataset.userToggled = 'true';
       };
 
-      const updateRequirementSummary = () => {
+      const updateRequirementSummary = (keepSelection = true) => {
         if (!requirement) {
           reqSummaryEl.textContent = '未解析';
           return;
@@ -585,10 +614,10 @@
           <span>信息项:${infoItems.length}</span>
           <span>页面:${pages.length}</span>
         `;
-        renderPageList();
+        renderPageList(keepSelection);
       };
 
-      const renderPageList = () => {
+      const renderPageList = (keepSelection = true) => {
         pageListEl.innerHTML = '';
         if (!requirement?.pages?.length) {
           pageListEl.textContent = '暂无解析结果';
@@ -596,10 +625,11 @@
           selectedPageId = null;
           return;
         }
+        const prevSelected = keepSelection ? selectedPageId : null;
         requirement.pages.forEach((page) => {
           const row = document.createElement('div');
           row.className = 'req-item';
-          if (page.id === selectedPageId) row.classList.add('active');
+          if (selectedPageIds.has(page.id)) row.classList.add('active');
           const phase = requirement.phases?.find((p) => p.id === page.phaseId);
           const role = requirement.roles?.find((r) => r.id === page.roleId);
           const cond = requirement.conditions?.find((c) => c.id === page.conditionId);
@@ -612,6 +642,11 @@
             </div>
           `;
           row.onclick = () => {
+            if (selectedPageIds.has(page.id)) {
+              selectedPageIds.delete(page.id);
+            } else {
+              selectedPageIds.add(page.id);
+            }
             selectedPageId = page.id;
             renderPageList();
             renderPageInfo(page);
@@ -620,8 +655,12 @@
         });
         if (!selectedPageId && requirement.pages.length) {
           selectedPageId = requirement.pages[0].id;
-          renderPageList();
-          renderPageInfo(requirement.pages[0]);
+          selectedPageIds.add(selectedPageId);
+        }
+        if (selectedPageId) {
+          const current = requirement.pages.find((p) => p.id === selectedPageId) || requirement.pages[0];
+          selectedPageId = current?.id || null;
+          if (selectedPageId) renderPageInfo(current);
         }
       };
 
@@ -798,7 +837,7 @@
 
         if (msg.type === 'requirement') {
           requirement = msg.data;
-          updateRequirementSummary();
+          updateRequirementSummary(true);
           return;
         }
 
