@@ -173,6 +173,47 @@
         min-height: 16px;
         color: #374151;
       }
+      .op-list {
+        margin-top: 6px;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        padding: 6px;
+        background: #fff;
+        font-size: 11px;
+        max-height: 140px;
+        overflow: auto;
+      }
+      .op-item {
+        padding: 2px 0;
+        border-bottom: 1px solid #f3f4f6;
+      }
+      .op-item:last-child {
+        border-bottom: none;
+      }
+      .tabs {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+      .tab-btn {
+        border: 1px solid #e5e7eb;
+        background: #f3f4f6;
+        border-radius: 8px;
+        padding: 6px 10px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+      .tab-btn.active {
+        background: #e0f2fe;
+        border-color: #7dd3fc;
+        font-weight: 600;
+      }
+      .tab-panel {
+        display: none;
+      }
+      .tab-panel.active {
+        display: block;
+      }
       .req-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -274,96 +315,136 @@
     </style>
   </head>
   <body>
-    <div class="section">
-      <h3>组件库</h3>
-      <div class="lib-header">
-        <button id="import">导入选中 Section</button>
-        <div class="right">
-          <button id="enrich">AI 推荐元数据</button>
-          <button id="export">导出 JSON</button>
-        </div>
-      </div>
-      <div id="library-list" class="lib-list"></div>
-      <div id="exportWrap" class="export-block">
-        <div class="row" style="justify-content: space-between; align-items: center">
-          <span class="summary">已生成 JSON，可复制</span>
-          <button id="copyExport">复制</button>
-        </div>
-        <textarea id="exportText" readonly></textarea>
-      </div>
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="generateTab">生成 / 配置</button>
+      <button class="tab-btn" data-tab="editTab">UI 编辑</button>
     </div>
 
-    <div class="section">
-      <h3>需求文档</h3>
-      <textarea id="docText" class="small" placeholder="粘贴需求文档，用于解析阶段/角色/信息项/页面"></textarea>
-      <div class="row" style="margin-top: 6px; align-items: center">
-        <button id="parseDoc">解析文档</button>
-        <div class="summary" id="reqSummary"></div>
+    <div id="generateTab" class="tab-panel active">
+      <div class="section">
+        <h3>组件库</h3>
+        <div class="lib-header">
+          <button id="import">导入选中 Section</button>
+          <div class="right">
+            <button id="enrich">AI 推荐元数据</button>
+            <button id="export">导出 JSON</button>
+          </div>
+        </div>
+        <div id="library-list" class="lib-list"></div>
+        <div id="exportWrap" class="export-block">
+          <div class="row" style="justify-content: space-between; align-items: center">
+            <span class="summary">已生成 JSON，可复制</span>
+            <button id="copyExport">复制</button>
+          </div>
+          <textarea id="exportText" readonly></textarea>
+        </div>
       </div>
-    </div>
 
-    <div class="section">
-      <h3>解析结果</h3>
-      <div class="req-grid">
-        <div>
-          <div class="summary">页面列表</div>
-          <div id="pageList" class="req-list"></div>
-          <div class="summary" style="margin-top: 6px">可多选页面</div>
-          <div style="margin-top: 6px">
-            <label>布局模板</label>
-            <select id="templateSelect" style="width: 100%; padding: 4px 6px; font-size: 12px;">
-              <option value="two-col">双列</option>
-              <option value="three-col">三列</option>
-              <option value="main-side">主+侧</option>
-              <option value="dashboard">仪表盘</option>
+      <div class="section">
+        <h3>需求文档</h3>
+        <textarea id="docText" class="small" placeholder="粘贴需求文档，用于解析阶段/角色/信息项/页面"></textarea>
+        <div class="row" style="margin-top: 6px; align-items: center">
+          <button id="parseDoc">解析文档</button>
+          <div class="summary" id="reqSummary"></div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>解析结果</h3>
+        <div class="req-grid">
+          <div>
+            <div class="summary">页面列表</div>
+            <div id="pageList" class="req-list"></div>
+            <div class="summary" style="margin-top: 6px">可多选页面</div>
+            <div style="margin-top: 6px">
+              <label>布局模板</label>
+              <select id="templateSelect" style="width: 100%; padding: 4px 6px; font-size: 12px;">
+                <option value="two-col">双列</option>
+                <option value="three-col">三列</option>
+                <option value="main-side">主+侧</option>
+                <option value="dashboard">仪表盘</option>
+              </select>
+            </div>
+            <button id="generatePages" style="margin-top: 6px">生成所选页面</button>
+          </div>
+          <div>
+            <div class="summary">信息项优先级（选中页面）</div>
+            <div id="pageInfo" class="priority-list"></div>
+            <div class="row" style="justify-content: flex-end; margin-top: 6px">
+              <button id="recommendBindings">AI 推荐组件</button>
+            </div>
+          </div>
+        </div>
+        <div class="summary" style="margin-top: 6px">
+          <span>高优先级 ≤ 1 项</span>
+          <span style="margin-left: 8px">中优先级 ≤ 4 项</span>
+        </div>
+        <button id="saveRequirement" style="margin-top: 6px">保存解析结果</button>
+      </div>
+
+      <div class="section">
+        <h3>生成设置</h3>
+        <div class="two-col">
+          <div>
+            <label>模型提供商</label>
+            <select id="provider">
+              <option value="siliconflow">SiliconFlow（OpenAI兼容）</option>
+              <option value="openai">OpenAI</option>
+              <option value="gemini">Gemini</option>
             </select>
           </div>
-          <button id="generatePages" style="margin-top: 6px">生成所选页面</button>
-        </div>
-        <div>
-          <div class="summary">信息项优先级（选中页面）</div>
-          <div id="pageInfo" class="priority-list"></div>
-          <div class="row" style="justify-content: flex-end; margin-top: 6px">
-            <button id="recommendBindings">AI 推荐组件</button>
+          <div>
+            <label>指令（自然语言）</label>
+            <textarea
+              id="prompt"
+              rows="3"
+              placeholder="例如：生成“姿态监控-正常飞行”页面"
+            ></textarea>
           </div>
         </div>
+        <div class="row" style="align-items: center; margin-top: 8px">
+          <label style="margin: 0; display: flex; align-items: center; gap: 4px">
+            <input id="useLibrary" type="checkbox" checked />
+            生成时参考组件库
+          </label>
+          <button id="run">生成到画布</button>
+        </div>
       </div>
-      <div class="summary" style="margin-top: 6px">
-        <span>高优先级 ≤ 1 项</span>
-        <span style="margin-left: 8px">中优先级 ≤ 4 项</span>
-      </div>
-      <button id="saveRequirement" style="margin-top: 6px">保存解析结果</button>
+      <div id="status" class="status"></div>
     </div>
 
-    <div class="section">
-      <h3>生成设置</h3>
-      <div class="two-col">
-        <div>
-          <label>模型提供商</label>
-          <select id="provider">
-            <option value="siliconflow">SiliconFlow（OpenAI兼容）</option>
-            <option value="openai">OpenAI</option>
-            <option value="gemini">Gemini</option>
-          </select>
+    <div id="editTab" class="tab-panel">
+      <div class="section">
+        <h3>UI 编辑（单页面）</h3>
+        <div class="summary">先在画布选中要编辑的 Frame，然后输入自然语言指令</div>
+        <div class="two-col" style="margin-top: 6px">
+          <div>
+            <label>模型提供商</label>
+            <select id="editProvider">
+              <option value="siliconflow">SiliconFlow（OpenAI兼容）</option>
+              <option value="openai">OpenAI</option>
+              <option value="gemini">Gemini</option>
+            </select>
+          </div>
+          <div>
+            <label>API Key（可选）</label>
+            <input id="editApiKey" type="password" placeholder="留空则使用服务端配置" />
+          </div>
         </div>
-        <div>
-          <label>指令（自然语言）</label>
-          <textarea
-            id="prompt"
-            rows="3"
-            placeholder="例如：生成“姿态监控-正常飞行”页面"
-          ></textarea>
+        <label style="margin-top: 6px; display: block">编辑指令</label>
+        <textarea
+          id="editPrompt"
+          rows="3"
+          placeholder="例如：把过滤条调整到顶部，并增加一个两列布局的告警摘要卡片"
+        ></textarea>
+        <div class="row" style="margin-top: 8px; justify-content: space-between; align-items: center">
+          <button id="applyEdit" style="width: auto">应用到所选页面</button>
+          <button id="undoEdit" style="width: auto">撤销上一次编辑</button>
         </div>
-      </div>
-      <div class="row" style="align-items: center; margin-top: 8px">
-        <label style="margin: 0; display: flex; align-items: center; gap: 4px">
-          <input id="useLibrary" type="checkbox" checked />
-          生成时参考组件库
-        </label>
-        <button id="run">生成到画布</button>
+        <div id="editStatus" class="status"></div>
+        <div id="editOpsList" class="op-list"></div>
       </div>
     </div>
-    <div id="status" class="status"></div>
 
     <script>
       const runButton = document.getElementById('run');
@@ -387,6 +468,18 @@
       const recommendBtn = document.getElementById('recommendBindings');
       const templateSelect = document.getElementById('templateSelect');
       const generatePagesBtn = document.getElementById('generatePages');
+      const editPromptEl = document.getElementById('editPrompt');
+      const editProviderEl = document.getElementById('editProvider');
+      const editApiKeyEl = document.getElementById('editApiKey');
+      const applyEditBtn = document.getElementById('applyEdit');
+      const undoEditBtn = document.getElementById('undoEdit');
+      const editStatusEl = document.getElementById('editStatus');
+      const editOpsList = document.getElementById('editOpsList');
+      const tabButtons = Array.from(document.querySelectorAll('.tab-btn'));
+      const tabPanels = {
+        generateTab: document.getElementById('generateTab'),
+        editTab: document.getElementById('editTab')
+      };
       let library = [];
       let requirement = null;
       let slotState = null;
@@ -406,6 +499,53 @@
         }
         statusEl.dataset.state = isLoading ? 'loading' : statusEl.dataset.state;
       };
+
+      const setEditLoading = (isLoading) => {
+        applyEditBtn.disabled = isLoading;
+        undoEditBtn.disabled = isLoading;
+        if (isLoading) {
+          editStatusEl.textContent = '正在生成编辑方案…';
+          editStatusEl.dataset.state = 'loading';
+        }
+      };
+
+      const renderEditOps = (ops = [], summary = '') => {
+        if (!editOpsList) return;
+        editOpsList.innerHTML = '';
+        if (summary) {
+          const s = document.createElement('div');
+          s.className = 'op-item';
+          s.textContent = summary;
+          editOpsList.appendChild(s);
+        }
+        if (!ops.length && !summary) {
+          editOpsList.textContent = '暂无操作记录';
+          return;
+        }
+        ops.forEach((item) => {
+          const row = document.createElement('div');
+          row.className = 'op-item';
+          row.textContent = `${item.op || ''} · ${item.detail || ''}`;
+          editOpsList.appendChild(row);
+        });
+      };
+
+      const switchTab = (tabId) => {
+        tabButtons.forEach((btn) => {
+          btn.classList.toggle('active', btn.dataset.tab === tabId);
+        });
+        Object.entries(tabPanels).forEach(([id, panel]) => {
+          if (panel) panel.classList.toggle('active', id === tabId);
+        });
+      };
+
+      tabButtons.forEach((btn) => {
+        btn.onclick = () => switchTab(btn.dataset.tab);
+      });
+
+      if (editProviderEl && providerEl) {
+        editProviderEl.value = providerEl.value;
+      }
 
       const renderLibrary = () => {
         libraryListEl.innerHTML = '';
@@ -595,6 +735,31 @@
         }, '*');
         statusEl.textContent = `生成 ${pageIds.length} 个页面中…`;
         statusEl.dataset.state = 'loading';
+      };
+
+      applyEditBtn.onclick = () => {
+        const prompt = (editPromptEl.value || '').trim();
+        if (!prompt) {
+          editStatusEl.textContent = '请输入编辑指令';
+          editStatusEl.dataset.state = 'error';
+          return;
+        }
+        parent.postMessage(
+          {
+            pluginMessage: {
+              type: 'edit-page',
+              prompt,
+              provider: editProviderEl.value,
+              apiKey: (editApiKeyEl.value || '').trim()
+            }
+          },
+          '*'
+        );
+        setEditLoading(true);
+      };
+
+      undoEditBtn.onclick = () => {
+        parent.postMessage({ pluginMessage: { type: 'undo-edit' } }, '*');
       };
 
       useLibraryEl.onchange = () => {
@@ -792,6 +957,7 @@
       // Request library & requirement on load
       parent.postMessage({ pluginMessage: { type: 'request-library' } }, '*');
       parent.postMessage({ pluginMessage: { type: 'request-requirement' } }, '*');
+      renderEditOps([], '');
 
       window.onmessage = (event) => {
         const msg = event.data.pluginMessage;
@@ -838,6 +1004,43 @@
         if (msg.type === 'requirement') {
           requirement = msg.data;
           updateRequirementSummary(true);
+          return;
+        }
+
+        if (msg.type === 'edit-ops') {
+          renderEditOps(msg.operations || [], msg.summary || '');
+          return;
+        }
+
+        if (msg.type === 'edit-status') {
+          if (msg.state === 'loading') {
+            setEditLoading(true);
+            editStatusEl.textContent = msg.message || '正在编辑…';
+            editStatusEl.dataset.state = 'loading';
+          } else {
+            setEditLoading(false);
+          }
+
+          if (msg.state === 'error') {
+            editStatusEl.dataset.state = 'error';
+            editStatusEl.textContent = `错误：${msg.message || '编辑失败'}`;
+          } else if (msg.state === 'success') {
+            editStatusEl.dataset.state = 'success';
+            editStatusEl.textContent = msg.message || '编辑完成';
+            setTimeout(() => {
+              if (editStatusEl.dataset.state === 'success') {
+                editStatusEl.textContent = '';
+                editStatusEl.dataset.state = '';
+              }
+            }, 1500);
+          } else if (
+            msg.state === 'idle' &&
+            editStatusEl.dataset.state !== 'error' &&
+            editStatusEl.dataset.state !== 'success'
+          ) {
+            editStatusEl.dataset.state = '';
+            editStatusEl.textContent = '';
+          }
           return;
         }
 

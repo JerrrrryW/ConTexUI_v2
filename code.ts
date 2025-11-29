@@ -52,6 +52,12 @@ type GenerateDesignMessage = {
   provider: Provider;
   useLibrary?: boolean;
 };
+type GeneratePagesMessage = {
+  type: 'generate-pages';
+  pageIds: string[];
+  template: LayoutTemplate;
+  useLibrary?: boolean;
+};
 type ImportMessage = { type: 'import-section' };
 type RequestLibraryMessage = { type: 'request-library' };
 type ExportLibraryMessage = { type: 'export-library' };
@@ -72,8 +78,16 @@ type UpdateRequirementMessage = { type: 'update-requirement'; data: RequirementM
 type RecommendBindingsMessage = { type: 'recommend-bindings'; pageId?: string };
 type UpdateNoteMessage = { type: 'update-note'; id: string; note: string };
 type RemoveComponentMessage = { type: 'remove-component'; id: string };
+type EditPageMessage = {
+  type: 'edit-page';
+  prompt: string;
+  apiKey: string;
+  provider: Provider;
+};
+type UndoEditMessage = { type: 'undo-edit' };
 type PluginMessage =
   | GenerateDesignMessage
+  | GeneratePagesMessage
   | ImportMessage
   | RequestLibraryMessage
   | ExportLibraryMessage
@@ -86,7 +100,68 @@ type PluginMessage =
   | UpdateRequirementMessage
   | RecommendBindingsMessage
   | UpdateNoteMessage
-  | RemoveComponentMessage;
+  | RemoveComponentMessage
+  | EditPageMessage
+  | UndoEditMessage;
+
+type EditOperation =
+  | {
+      op: 'update';
+      targetId: string;
+      props: {
+        name?: string;
+        text?: string;
+        fill?: string;
+        x?: number;
+        y?: number;
+        width?: number;
+        height?: number;
+        visible?: boolean;
+      };
+    }
+  | { op: 'remove'; targetId: string }
+  | {
+      op: 'reorder';
+      targetId: string;
+      parentId?: string;
+      insertIndex?: number;
+    }
+  | {
+      op: 'add-text';
+      parentId?: string;
+      insertIndex?: number;
+      text?: string;
+      fill?: string;
+      width?: number;
+      height?: number;
+      x?: number;
+      y?: number;
+    }
+  | {
+      op: 'add-rectangle';
+      parentId?: string;
+      insertIndex?: number;
+      fill?: string;
+      width?: number;
+      height?: number;
+      x?: number;
+      y?: number;
+    };
+
+type EditApiResponse = { operations?: EditOperation[]; summary?: string };
+
+type SerializedNode = {
+  id: string;
+  type: SceneNode['type'];
+  name?: string;
+  text?: string;
+  width?: number;
+  height?: number;
+  x?: number;
+  y?: number;
+  visible?: boolean;
+  children?: SerializedNode[];
+};
 
 type ComponentExample = {
   id: string;
@@ -150,13 +225,19 @@ const REQUIREMENT_KEY = `ctx:${FILE_KEY}:requirement`;
 const LAYOUT_KEY = `ctx:${FILE_KEY}:layouts`;
 let componentLibrary: ComponentExample[] = [];
 let requirementModel: RequirementModel | null = null;
+let lastEditBackup: { frameId: string; backupId: string } | null = null;
+type LayoutTemplate = 'two-col' | 'three-col' | 'main-side' | 'dashboard';
 
-figma.showUI(__html__, { width: 540, height: 720 });
+figma.showUI(__html__, { width: 720, height: 720 });
 
 initializeLibrary();
 initializeRequirement();
 
 figma.ui.onmessage = async (msg: PluginMessage) => {
+  if (msg.type === 'generate-pages') {
+    await generatePages(msg.template, msg.pageIds, msg.useLibrary ?? true);
+    return;
+  }
   if (msg.type === 'import-section') {
     await importSelectedSection();
     return;
@@ -220,6 +301,16 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
 
   if (msg.type === 'remove-component') {
     await removeComponent(msg.id);
+    return;
+  }
+
+  if (msg.type === 'edit-page') {
+    await handleEditPage(msg);
+    return;
+  }
+
+  if (msg.type === 'undo-edit') {
+    await handleUndoEdit();
     return;
   }
 
@@ -389,6 +480,205 @@ async function handleRecommendBindings(pageId?: string) {
   }
 }
 
+async function handleEditPage(msg: EditPageMessage) {
+  const prompt = msg.prompt?.trim();
+  const apiKey = msg.apiKey?.trim();
+  const provider: Provider = msg.provider || 'openai';
+
+  const selection = figma.currentPage.selection;
+  const frame = selection.find((node) => node.type === 'FRAME') as FrameNode | undefined;
+
+  if (!prompt) {
+    figma.notify('请输入编辑指令');
+    sendEditStatus('error', '请输入编辑指令');
+    return;
+  }
+
+  if (!frame) {
+    figma.notify('请先选中一个 Frame（页面）');
+    sendEditStatus('error', '需要选择一个 Frame');
+    return;
+  }
+
+  try {
+    sendEditStatus('loading', '正在向模型请求编辑方案');
+    const snapshot = buildFrameSnapshot(frame);
+    const result = await callEditPage({
+      prompt,
+      apiKey,
+      provider,
+      frameSnapshot: snapshot
+    });
+    const operations = Array.isArray(result.operations) ? result.operations : [];
+    if (!operations.length) {
+      throw new Error('模型未返回操作');
+    }
+    await loadFonts();
+    storeEditBackup(frame);
+    const applied = applyEditOperations(frame, operations);
+    figma.currentPage.selection = [frame];
+    figma.viewport.scrollAndZoomIntoView([frame]);
+    figma.ui.postMessage({ type: 'edit-ops', operations: applied, summary: result.summary });
+    figma.notify('页面已更新');
+    sendEditStatus('success', '编辑完成');
+  } catch (error) {
+    figma.notify(`编辑失败：${getErrorMessage(error)}`);
+    sendEditStatus('error', getErrorMessage(error));
+  } finally {
+    sendEditStatus('idle');
+  }
+}
+
+async function handleUndoEdit() {
+  if (!lastEditBackup?.backupId) {
+    figma.notify('没有可撤销的编辑');
+    sendEditStatus('error', '无可恢复的内容');
+    return;
+  }
+  const backup = figma.getNodeById(lastEditBackup.backupId) as FrameNode | null;
+  const target = figma.getNodeById(lastEditBackup.frameId) as FrameNode | null;
+  if (!backup || backup.type !== 'FRAME') {
+    figma.notify('未找到备份');
+    cleanupEditBackup();
+    sendEditStatus('error', '备份已丢失');
+    return;
+  }
+  const parent = (target?.parent || backup.parent) as ChildrenMixin | null;
+  if (!parent || typeof (parent as ChildrenMixin).appendChild !== 'function') {
+    figma.notify('无法恢复页面');
+    sendEditStatus('error', '无法恢复页面');
+    cleanupEditBackup();
+    return;
+  }
+  const insertIndex = target ? parent.children.indexOf(target) : parent.children.length;
+  backup.visible = true;
+  backup.locked = false;
+  if (target) {
+    backup.name = target.name;
+    backup.x = target.x;
+    backup.y = target.y;
+  }
+  parent.insertChild(Math.max(0, insertIndex), backup);
+  if (target) target.remove();
+  figma.currentPage.selection = [backup];
+  figma.viewport.scrollAndZoomIntoView([backup]);
+  figma.notify('已恢复到上一次编辑前');
+  sendEditStatus('success', '已恢复到上一次编辑前');
+  cleanupEditBackup();
+  sendEditStatus('idle');
+}
+
+function applySpecToFrame(
+  frame: FrameNode,
+  spec: UISpec,
+  componentMap: Map<string, SceneNode>
+) {
+  while (frame.children.length) {
+    frame.children[0].remove();
+  }
+
+  frame.name = spec.title || frame.name || '编辑后的页面';
+  frame.layoutMode = 'VERTICAL';
+  frame.primaryAxisSizingMode = 'AUTO';
+  frame.counterAxisSizingMode = 'AUTO';
+  frame.itemSpacing = spec.spacing ?? 12;
+  frame.paddingLeft = spec.padding ?? 24;
+  frame.paddingRight = spec.padding ?? 24;
+  frame.paddingTop = spec.padding ?? 24;
+  frame.paddingBottom = spec.padding ?? 24;
+  frame.cornerRadius =
+    typeof frame.cornerRadius === 'number' && !Number.isNaN(frame.cornerRadius)
+      ? frame.cornerRadius
+      : 16;
+  frame.fills = [{ type: 'SOLID', color: hexToRgb(spec.background || DEFAULT_BACKGROUND) }];
+
+  spec.layers.forEach((layer) => {
+    const node = createLayerNode(layer, componentMap);
+    frame.appendChild(node);
+  });
+}
+
+function createBindingNode(
+  page: PageDefinition,
+  item: PageInfoPriority,
+  componentMap: Map<string, SceneNode>,
+  width: number,
+  height: number
+): FrameNode {
+  const binding = (page.preferredBindings || []).find((b) => b.infoItemId === item.infoItemId);
+  if (binding?.componentId) {
+    const comp = componentMap.get(binding.componentId);
+    if (comp && 'clone' in comp) {
+      const clone = (comp as SceneNode).clone() as FrameNode;
+      clone.name = binding.componentId;
+      clone.resizeWithoutConstraints(width, height);
+      if ('layoutAlign' in clone) {
+        (clone as LayoutMixin).layoutAlign = 'INHERIT';
+      }
+      return clone;
+    }
+  }
+
+  const placeholder = figma.createFrame();
+  placeholder.name = `未绑定 · ${item.infoItemId}`;
+  placeholder.resize(width, height);
+  placeholder.fills = [{ type: 'SOLID', color: hexToRgb('#F9FAFB') }];
+  placeholder.strokes = [{ type: 'SOLID', color: hexToRgb('#E5E7EB') }];
+  placeholder.strokeWeight = 1;
+  placeholder.layoutMode = 'VERTICAL';
+  placeholder.primaryAxisSizingMode = 'AUTO';
+  placeholder.counterAxisSizingMode = 'AUTO';
+  placeholder.paddingTop = 12;
+  placeholder.paddingBottom = 12;
+  placeholder.paddingLeft = 12;
+  placeholder.paddingRight = 12;
+  placeholder.itemSpacing = 6;
+
+  const info = requirementModel?.infoItems.find((i) => i.id === item.infoItemId);
+
+  const title = figma.createText();
+  title.fontName = activeFont;
+  title.characters = info?.name || item.infoItemId;
+  title.fontSize = 14;
+  title.fills = [{ type: 'SOLID', color: hexToRgb('#111827') }];
+
+  const desc = figma.createText();
+  desc.fontName = activeFont;
+  desc.characters = info?.description || '未绑定组件';
+  desc.fontSize = 12;
+  desc.fills = [{ type: 'SOLID', color: hexToRgb('#6B7280') }];
+
+  placeholder.appendChild(title);
+  placeholder.appendChild(desc);
+  return placeholder;
+}
+
+function storeEditBackup(frame: FrameNode) {
+  cleanupEditBackup();
+  const clone = frame.clone();
+  clone.visible = false;
+  clone.locked = true;
+  clone.name = `${frame.name || 'Frame'} · Backup`;
+  const parent = frame.parent;
+  if (parent && 'appendChild' in parent) {
+    (parent as ChildrenMixin).appendChild(clone);
+  } else {
+    figma.currentPage.appendChild(clone);
+  }
+  clone.x = frame.x;
+  clone.y = frame.y;
+  lastEditBackup = { frameId: frame.id, backupId: clone.id };
+}
+
+function cleanupEditBackup() {
+  if (!lastEditBackup?.backupId) return;
+  const node = figma.getNodeById(lastEditBackup.backupId);
+  if (node && 'remove' in node) {
+    node.remove();
+  }
+  lastEditBackup = null;
+}
+
 async function updateNote(id: string, note: string) {
   const target = componentLibrary.find((item) => item.id === id);
   if (!target) return;
@@ -474,12 +764,21 @@ async function fetchDesignSpec(
   provider: Provider,
   libraryContext: string
 ): Promise<UISpec> {
+  const systemPrompt = buildSystemPrompt(libraryContext);
   if (provider === 'gemini') {
-    return fetchGeminiSpec(prompt, apiKey, libraryContext);
+    return fetchGeminiSpec(prompt, apiKey, libraryContext, systemPrompt, provider);
   }
 
   const config = provider === 'openai' ? PROVIDERS.openai : PROVIDERS.siliconflow;
-  return fetchOpenAICompatSpec(prompt, apiKey, config.baseUrl, config.model, libraryContext);
+  return fetchOpenAICompatSpec(
+    prompt,
+    apiKey,
+    config.baseUrl,
+    config.model,
+    libraryContext,
+    systemPrompt,
+    provider
+  );
 }
 
 async function fetchOpenAICompatSpec(
@@ -487,9 +786,11 @@ async function fetchOpenAICompatSpec(
   apiKey: string,
   baseUrl: string,
   model: string,
-  libraryContext: string
+  libraryContext: string,
+  systemPromptOverride?: string,
+  providerName?: Provider
 ): Promise<UISpec> {
-  const systemPrompt = buildSystemPrompt(libraryContext);
+  const systemPrompt = systemPromptOverride ?? buildSystemPrompt(libraryContext);
   const userPrompt = prompt;
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -510,6 +811,7 @@ async function fetchOpenAICompatSpec(
   });
 
   const raw = await response.text();
+  logModelIO(providerName || 'openai', model, systemPrompt, userPrompt, raw);
 
   if (!response.ok) {
     throw new Error(`模型请求失败 (${response.status}): ${truncate(raw)}`);
@@ -531,9 +833,15 @@ async function fetchOpenAICompatSpec(
   return normalizeSpec(parsed);
 }
 
-async function fetchGeminiSpec(prompt: string, apiKey: string, libraryContext: string): Promise<UISpec> {
+async function fetchGeminiSpec(
+  prompt: string,
+  apiKey: string,
+  libraryContext: string,
+  systemPromptOverride?: string,
+  providerName?: Provider
+): Promise<UISpec> {
   const { baseUrl, model } = PROVIDERS.gemini;
-  const systemPrompt = buildSystemPrompt(libraryContext);
+  const systemPrompt = systemPromptOverride ?? buildSystemPrompt(libraryContext);
   const userPrompt = prompt;
 
   const url = `${baseUrl}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
@@ -548,6 +856,7 @@ async function fetchGeminiSpec(prompt: string, apiKey: string, libraryContext: s
   });
 
   const raw = await response.text();
+  logModelIO(providerName || 'gemini', model, systemPrompt, userPrompt, raw);
 
   if (!response.ok) {
     throw new Error(`Gemini 请求失败 (${response.status}): ${truncate(raw)}`);
@@ -819,6 +1128,104 @@ function createRectangle(layer: LayerSpec): RectangleNode {
   return rect;
 }
 
+async function generatePages(template: LayoutTemplate, pageIds: string[], useLibrary: boolean) {
+  if (!requirementModel) {
+    figma.notify('请先解析需求文档');
+    return;
+  }
+  const pages = requirementModel.pages.filter((p) => pageIds.indexOf(p.id) !== -1);
+  if (!pages.length) {
+    figma.notify('未找到页面');
+    return;
+  }
+
+  await loadFonts();
+
+  const bindingIds = new Set<string>();
+  pages.forEach((page) => {
+    (page.preferredBindings || []).forEach((b) => {
+      if (b.componentId) {
+        // Avoid includes because lib is es6; using indexOf
+        if (bindingIds.has(b.componentId) === false) bindingIds.add(b.componentId);
+      }
+    });
+  });
+  const componentMap = useLibrary
+    ? await loadComponentsByIds(Array.from(bindingIds))
+    : new Map<string, SceneNode>();
+
+  const created: FrameNode[] = [];
+
+  pages.forEach((page) => {
+    const frame = buildPageFrame(template, page, componentMap);
+    figma.currentPage.appendChild(frame);
+    created.push(frame);
+  });
+
+  if (created.length) {
+    figma.currentPage.selection = created;
+    figma.viewport.scrollAndZoomIntoView(created);
+  }
+}
+
+function buildPageFrame(
+  template: LayoutTemplate,
+  page: PageDefinition,
+  componentMap: Map<string, SceneNode>
+): FrameNode {
+  const frame = figma.createFrame();
+  const phase = requirementModel?.phases.find((p) => p.id === page.phaseId);
+  const role = requirementModel?.roles.find((r) => r.id === page.roleId);
+  const condition = requirementModel?.conditions.find((c) => c.id === page.conditionId);
+  frame.name = `${page.name || '页面'} · ${phase?.name || ''}·${role?.name || ''}·${
+    condition?.name || ''
+  }`;
+  frame.layoutMode = 'NONE';
+  frame.clipsContent = false;
+  frame.fills = [];
+  const padding = 24;
+  const gap = 24;
+  const cardWidth = 320;
+  const cardHeight = 200;
+
+  const columns =
+    template === 'three-col'
+      ? 3
+      : template === 'dashboard'
+      ? 3
+      : 2; // two-col / main-side default 2
+
+  let x = padding;
+  let y = padding;
+  let col = 0;
+  const maxWidths: number[] = [];
+
+  const sorted = page.infoPriorities.slice().sort((a, b) => a.priority - b.priority);
+
+  sorted.forEach((item, index) => {
+    const isFirst = index === 0 && template === 'main-side';
+    const span = isFirst ? columns : 1;
+    const width = span * cardWidth + (span - 1) * gap;
+    const node = createBindingNode(page, item, componentMap, width, cardHeight);
+    node.x = x;
+    node.y = y;
+    frame.appendChild(node);
+
+    col += span;
+    x += width + gap;
+    maxWidths.push(node.x + node.width);
+
+    if (col >= columns) {
+      col = 0;
+      x = padding;
+      y += cardHeight + gap;
+    }
+  });
+
+  frame.resize(Math.max(...maxWidths, padding * 2 + columns * cardWidth + (columns - 1) * gap), y + cardHeight + padding);
+  return frame;
+}
+
 function createComponentNode(layer: LayerSpec, componentMap: Map<string, SceneNode>): SceneNode {
   const sourceId =
     layer.componentId || findComponentIdByName(layer.componentName || layer.label || '');
@@ -873,6 +1280,156 @@ function createComponentNode(layer: LayerSpec, componentMap: Map<string, SceneNo
   if (noteText) fallback.appendChild(noteText);
 
   return fallback;
+}
+
+function buildFrameSnapshot(frame: FrameNode): SerializedNode {
+  const maxNodes = 120;
+  let count = 0;
+  const walk = (node: SceneNode): SerializedNode | null => {
+    if (count >= maxNodes) return null;
+    count += 1;
+    const snap: SerializedNode = {
+      id: node.id,
+      type: node.type,
+      name: node.name,
+      visible: 'visible' in node ? (node as GeometryMixin & SceneNode).visible !== false : true
+    };
+    if ('width' in node) snap.width = Math.round((node as LayoutMixin & SceneNode).width);
+    if ('height' in node) snap.height = Math.round((node as LayoutMixin & SceneNode).height);
+    if ('x' in node) snap.x = Math.round((node as LayoutMixin & SceneNode).x);
+    if ('y' in node) snap.y = Math.round((node as LayoutMixin & SceneNode).y);
+    if (node.type === 'TEXT') {
+      snap.text = (node as TextNode).characters.slice(0, 200).replace(/\s+/g, ' ');
+    }
+    if ('children' in node) {
+      const children: SerializedNode[] = [];
+      for (const child of (node as ChildrenMixin).children) {
+        const next = walk(child as SceneNode);
+        if (next) children.push(next);
+      }
+      if (children.length) snap.children = children;
+    }
+    return snap;
+  };
+  return walk(frame) as SerializedNode;
+}
+
+function applyEditOperations(frame: FrameNode, operations: EditOperation[]) {
+  const logs: { op: string; detail: string }[] = [];
+  const findNode = (id: string): SceneNode | null => {
+    if (frame.id === id) return frame;
+    const found = frame.findOne((node) => (node as SceneNode).id === id);
+    return (found as SceneNode) || null;
+  };
+
+  const ensureParent = (parentId?: string): ChildrenMixin => {
+    if (parentId) {
+      const parent = findNode(parentId);
+      if (parent && 'children' in parent) return parent as unknown as ChildrenMixin;
+    }
+    return frame as unknown as ChildrenMixin;
+  };
+
+  operations.forEach((op) => {
+    try {
+      if (op.op === 'update') {
+        const node = findNode(op.targetId);
+        if (!node) {
+          logs.push({ op: 'update', detail: `未找到 ${op.targetId}` });
+          return;
+        }
+        if (op.props.name && 'name' in node) node.name = op.props.name;
+        if (typeof op.props.visible === 'boolean' && 'visible' in node) {
+          (node as BaseNodeMixin & SceneNode).visible = op.props.visible;
+        }
+        if (node.type === 'TEXT' && typeof op.props.text === 'string') {
+          (node as TextNode).characters = op.props.text;
+        }
+        if ('fills' in node && op.props.fill) {
+          const fills = Array.isArray((node as GeometryMixin).fills)
+            ? ((node as GeometryMixin).fills as Paint[])
+            : [];
+          const next = fills.slice();
+          next[0] = { type: 'SOLID', color: hexToRgb(op.props.fill) } as SolidPaint;
+          (node as GeometryMixin).fills = next as Paint[];
+        }
+        if ('resize' in node) {
+          const w = typeof op.props.width === 'number' ? op.props.width : (node as LayoutMixin).width;
+          const h = typeof op.props.height === 'number' ? op.props.height : (node as LayoutMixin).height;
+          try {
+            (node as LayoutMixin).resize(w, h);
+          } catch (_error) {
+            // ignore resize errors
+          }
+        }
+        if ('x' in node && typeof op.props.x === 'number') (node as LayoutMixin).x = op.props.x;
+        if ('y' in node && typeof op.props.y === 'number') (node as LayoutMixin).y = op.props.y;
+        logs.push({ op: 'update', detail: `更新 ${node.name || node.id}` });
+      } else if (op.op === 'remove') {
+        const node = findNode(op.targetId);
+        if (node && 'remove' in node) {
+          const name = node.name || node.id;
+          node.remove();
+          logs.push({ op: 'remove', detail: `删除 ${name}` });
+        } else {
+          logs.push({ op: 'remove', detail: `未找到 ${op.targetId}` });
+        }
+      } else if (op.op === 'reorder') {
+        const node = findNode(op.targetId);
+        const parent = ensureParent(op.parentId || (node?.parent as any)?.id);
+        if (!node || !parent || !('appendChild' in parent)) {
+          logs.push({ op: 'reorder', detail: `无法移动 ${op.targetId}` });
+          return;
+        }
+        const insertIndex =
+          typeof op.insertIndex === 'number'
+            ? Math.max(0, Math.min(op.insertIndex, parent.children.length))
+            : parent.children.length;
+        (parent as ChildrenMixin).insertChild(insertIndex, node as SceneNode);
+        logs.push({ op: 'reorder', detail: `移动 ${node.name || node.id}` });
+      } else if (op.op === 'add-text') {
+        const parent = ensureParent(op.parentId);
+        const text = figma.createText();
+        text.fontName = activeFont;
+        text.characters = op.text || '新文本';
+        if (op.fill) text.fills = [{ type: 'SOLID', color: hexToRgb(op.fill) }];
+        if (typeof op.width === 'number' || typeof op.height === 'number') {
+          const w = op.width || text.width;
+          const h = op.height || text.height;
+          try {
+            text.resize(w, h);
+          } catch (_error) {
+            // ignore resize errors
+          }
+        }
+        if (typeof op.x === 'number') text.x = op.x;
+        if (typeof op.y === 'number') text.y = op.y;
+        const idx =
+          typeof op.insertIndex === 'number'
+            ? Math.max(0, Math.min(op.insertIndex, parent.children.length))
+            : parent.children.length;
+        parent.insertChild(idx, text);
+        logs.push({ op: 'add-text', detail: `新增文本 ${text.name || text.characters}` });
+      } else if (op.op === 'add-rectangle') {
+        const parent = ensureParent(op.parentId);
+        const rect = figma.createRectangle();
+        if (op.fill) rect.fills = [{ type: 'SOLID', color: hexToRgb(op.fill) }];
+        rect.resize(op.width || 120, op.height || 80);
+        if (typeof op.x === 'number') rect.x = op.x;
+        if (typeof op.y === 'number') rect.y = op.y;
+        const idx =
+          typeof op.insertIndex === 'number'
+            ? Math.max(0, Math.min(op.insertIndex, parent.children.length))
+            : parent.children.length;
+        parent.insertChild(idx, rect);
+        logs.push({ op: 'add-rectangle', detail: '新增矩形' });
+      }
+    } catch (_error) {
+      logs.push({ op: op.op, detail: `执行失败 ${op.op}` });
+    }
+  });
+
+  return logs;
 }
 
 function collectTexts(node: SceneNode): string[] {
@@ -1046,6 +1603,18 @@ async function loadComponentNodes(layers: LayerSpec[]): Promise<Map<string, Scen
   return componentMap;
 }
 
+async function loadComponentsByIds(ids: string[]): Promise<Map<string, SceneNode>> {
+  const map = new Map<string, SceneNode>();
+  const tasks = ids.map(async (id) => {
+    const node = await figma.getNodeByIdAsync(id);
+    if (node && 'clone' in node) {
+      map.set(id, node as SceneNode);
+    }
+  });
+  await Promise.all(tasks);
+  return map;
+}
+
 function hexToRgb(hex: string): RGB {
   const sanitized = hex.replace('#', '');
   const full = sanitized.length === 3
@@ -1086,10 +1655,33 @@ function truncate(text: string, limit = 160): string {
   return `${text.slice(0, limit)}…`;
 }
 
+function logModelIO(
+  provider: Provider,
+  model: string,
+  systemPrompt: string,
+  userPrompt: string,
+  rawResponse: string
+) {
+  const limit = 1200;
+  console.log(
+    `[LLM Request] provider=${provider} model=${model}\nsystem_prompt:\n${truncate(
+      systemPrompt,
+      limit
+    )}\nuser_prompt:\n${truncate(userPrompt, limit)}\nraw_response:\n${truncate(
+      rawResponse,
+      limit
+    )}`
+  );
+}
+
 function sendStatus(state: StatusMessage['state'], message?: string) {
   const payload: StatusMessage = { type: 'status', state };
   if (message) payload.message = message;
   figma.ui.postMessage(payload);
+}
+
+function sendEditStatus(state: StatusMessage['state'], message?: string) {
+  figma.ui.postMessage({ type: 'edit-status', state, message });
 }
 
 // --- Backend stubs (to be wired to real endpoints) ---
@@ -1107,11 +1699,18 @@ type EnrichLibraryResponse = {
     slots?: ComponentSlot[];
   }[];
 };
+type EditPageRequest = {
+  prompt: string;
+  apiKey?: string;
+  provider: Provider;
+  frameSnapshot: SerializedNode;
+};
 
 const API_BASE = 'http://localhost:4000';
 const ENRICH_BASE = API_BASE;
 const PARSE_BASE = API_BASE;
 const RECO_BASE = API_BASE;
+const EDIT_BASE = API_BASE;
 
 async function callParseDocument(docText: string): Promise<ParseDocResponse> {
   const response = await fetch(`${PARSE_BASE}/api/parse-doc`, {
@@ -1169,6 +1768,23 @@ async function callEnrichLibrary(
     throw new Error(`元数据生成失败 (${response.status}): ${raw.slice(0, 160)}`);
   }
   return JSON.parse(raw) as EnrichLibraryResponse;
+}
+
+async function callEditPage(payload: EditPageRequest): Promise<EditApiResponse> {
+  const response = await fetch(`${EDIT_BASE}/api/edit-page`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`编辑接口失败 (${response.status}): ${truncate(raw)}`);
+  }
+  const data = safeJsonParse<EditApiResponse>(raw);
+  if (!data || !Array.isArray(data.operations)) {
+    throw new Error('编辑接口返回格式不正确');
+  }
+  return data;
 }
 
 async function handleParseDocument(docText: string) {

@@ -16,6 +16,9 @@ const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.siliconflow.
 const MODEL = process.env.OPENAI_MODEL || 'Qwen/Qwen3-30B-A3B-Thinking-2507';
 const PARSE_MODEL = process.env.PARSE_MODEL || MODEL;
 const RECO_MODEL = process.env.RECO_MODEL || MODEL;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const GEMINI_BASE_URL = process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash-latest';
 
 // -------- ENRICH LIBRARY --------
 app.post('/api/enrich-library', async (req, res) => {
@@ -157,6 +160,88 @@ app.post('/api/recommend-components', async (req, res) => {
   }
 });
 
+// -------- EDIT PAGE (UI 自然语言编辑) --------
+app.post('/api/edit-page', async (req, res) => {
+  const userPrompt = req.body?.prompt;
+  const frameSnapshot = req.body?.frameSnapshot;
+  if (!userPrompt || typeof userPrompt !== 'string' || !userPrompt.trim()) {
+    return res.status(400).json({ error: 'prompt required' });
+  }
+  if (!frameSnapshot || typeof frameSnapshot !== 'object') {
+    return res.status(400).json({ error: 'frameSnapshot required' });
+  }
+  const provider = req.body?.provider || 'openai';
+  const apiKey = req.body?.apiKey || (provider === 'gemini' ? GEMINI_API_KEY : OPENAI_API_KEY);
+  const baseUrl = req.body?.baseUrl || OPENAI_BASE_URL;
+  const model = req.body?.model || MODEL;
+
+  if (!apiKey) return res.status(500).json({ error: 'Missing API key for provider' });
+
+  const systemPrompt = buildEditOpsSystemPrompt();
+  const prompt = buildEditOpsUserPrompt(userPrompt, frameSnapshot);
+
+  try {
+    console.log('[edit-page] provider:', provider, 'model:', model);
+    console.log('[edit-page] frame snapshot nodes:', countNodes(frameSnapshot));
+    console.log('[edit-page] prompt sample:', userPrompt.slice(0, 400));
+
+    if (provider === 'gemini') {
+      const geminiModel = req.body?.model || GEMINI_MODEL;
+      const url = `${GEMINI_BASE_URL}/models/${encodeURIComponent(geminiModel)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+      const completion = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.5 }
+        })
+      });
+      const raw = await completion.text();
+      console.log('[edit-page] gemini raw:', raw.slice(0, 800));
+      if (!completion.ok) {
+        return res.status(completion.status).json({ error: 'LLM error', detail: raw.slice(0, 800) });
+      }
+      const data = JSON.parse(raw);
+      const contentText = (data.candidates || [])
+        .flatMap((c) => c.content?.parts || [])
+        .map((p) => p.text || '')
+        .filter(Boolean)
+        .join('');
+      if (!contentText) return res.status(502).json({ error: 'Empty LLM response' });
+      const parsed = parseContent(contentText);
+      return res.json(parsed);
+    }
+
+    const completion = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        temperature: 0.5,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: prompt }
+        ]
+      })
+    });
+    const raw = await completion.text();
+    console.log('[edit-page] raw:', raw.slice(0, 800));
+    if (!completion.ok) {
+      return res.status(completion.status).json({ error: 'LLM error', detail: raw.slice(0, 800) });
+    }
+    const data = JSON.parse(raw);
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) return res.status(502).json({ error: 'Empty LLM response' });
+    const parsed = parseContent(content);
+    return res.json(parsed);
+  } catch (error) {
+    console.error('edit-page failed', error);
+    return res.status(500).json({ error: 'edit-page failed', detail: String(error) });
+  }
+});
+
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 app.listen(PORT, HOST, () => {
@@ -203,6 +288,44 @@ Rules:
 - Prefer components whose supportedDataTypes or tags match infoItem dataType/semanticTags.
 - If uncertain, leave componentId empty.
 `;
+
+function buildEditOpsSystemPrompt() {
+  return `You are a UI diff planner. Given the current frame tree (with node IDs) and a natural language edit request, output JSON only with concrete operations to apply on the canvas.
+Allowed operations (array "operations"):
+- update: {"op":"update","targetId":"","props":{"name?":"","text?":"","fill?","#hex","x?":0,"y?":0,"width?":200,"height?":120,"visible?":true}}
+- remove: {"op":"remove","targetId":""}
+- reorder: {"op":"reorder","targetId":"","parentId?":"","insertIndex?":0}
+- add-text: {"op":"add-text","parentId?":"","insertIndex?":0,"text?":"","fill?":"#111827","width?":140,"height?":32,"x?":0,"y?":0}
+- add-rectangle: {"op":"add-rectangle","parentId?":"","insertIndex?":0,"fill?":"#E5E7EB","width?":200,"height?":120,"x?":0,"y?":0}
+Rules:
+- Use only existing node ids when updating/removing/reordering.
+- Keep changes minimal and specific; avoid rewriting the whole tree.
+- If unsure about a field, omit it.
+Respond JSON only: {"operations":[...],"summary":"optional short summary"}.`;
+}
+
+function buildEditOpsUserPrompt(editRequest, frameSnapshot) {
+  const snapshotText = JSON.stringify(frameSnapshot, null, 2);
+  return `Current frame snapshot (id + children):
+${snapshotText}
+
+Edit request:
+${editRequest}
+
+Plan concrete operations (update/remove/reorder/add-text/add-rectangle) referencing node ids above. JSON only.`;
+}
+
+function countNodes(snapshot) {
+  let count = 0;
+  const walk = (node) => {
+    count += 1;
+    if (Array.isArray(node?.children)) {
+      node.children.forEach(walk);
+    }
+  };
+  walk(snapshot);
+  return count;
+}
 
 // -------- HELPERS --------
 function buildPrompt(items) {
