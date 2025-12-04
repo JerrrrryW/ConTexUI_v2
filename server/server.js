@@ -20,6 +20,201 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_BASE_URL = process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash-latest';
 
+// -------- EXPERIMENTS (in-memory) --------
+const experiments = [
+  {
+    id: 'exp-flight-dashboard',
+    name: '航班态势仪表盘',
+    description: '预设的航班态势需求模型与组件库示例，便于快速演示',
+    requirement: {
+      phases: [
+        { id: 'phase-prep', name: '起飞前' },
+        { id: 'phase-flight', name: '巡航中' }
+      ],
+      roles: [
+        { id: 'role-captain', name: '机长' },
+        { id: 'role-fo', name: '副驾驶' }
+      ],
+      conditions: [
+        { id: 'cond-normal', name: '正常状态' },
+        { id: 'cond-alert', name: '告警状态' }
+      ],
+      infoItems: [
+        { id: 'info-alt', name: '当前高度', dataType: 'numeric', semanticTags: ['altitude'] },
+        { id: 'info-speed', name: '对地速度', dataType: 'numeric', semanticTags: ['speed'] },
+        { id: 'info-fuel', name: '剩余燃油', dataType: 'numeric', semanticTags: ['fuel'] },
+        { id: 'info-weather', name: '前方天气', dataType: 'text', semanticTags: ['weather'] },
+        { id: 'info-alerts', name: '系统告警', dataType: 'alert', semanticTags: ['alert'] }
+      ],
+      pages: [
+        {
+          id: 'page-overview',
+          phaseId: 'phase-flight',
+          roleId: 'role-captain',
+          conditionId: 'cond-normal',
+          name: '飞行态势总览',
+          notes: '正常态的飞行关键指标总览',
+          infoPriorities: [
+            { infoItemId: 'info-alerts', priority: 1 },
+            { infoItemId: 'info-speed', priority: 2 },
+            { infoItemId: 'info-alt', priority: 3 },
+            { infoItemId: 'info-fuel', priority: 4 },
+            { infoItemId: 'info-weather', priority: 5 }
+          ],
+          preferredBindings: [
+            { infoItemId: 'info-alerts', componentId: 'comp-alert-list' },
+            { infoItemId: 'info-speed', componentId: 'comp-metric-speed' },
+            { infoItemId: 'info-alt', componentId: 'comp-metric-alt' },
+            { infoItemId: 'info-fuel', componentId: 'comp-metric-fuel' },
+            { infoItemId: 'info-weather', componentId: 'comp-weather' }
+          ]
+        },
+        {
+          id: 'page-alert',
+          phaseId: 'phase-flight',
+          roleId: 'role-fo',
+          conditionId: 'cond-alert',
+          name: '告警应对面板',
+          notes: '聚焦异常与分工的告警处理视图',
+          infoPriorities: [
+            { infoItemId: 'info-alerts', priority: 1 },
+            { infoItemId: 'info-alt', priority: 2 },
+            { infoItemId: 'info-speed', priority: 3 },
+            { infoItemId: 'info-fuel', priority: 4 }
+          ],
+          preferredBindings: [
+            { infoItemId: 'info-alerts', componentId: 'comp-alert-list' },
+            { infoItemId: 'info-alt', componentId: 'comp-metric-alt' },
+            { infoItemId: 'info-speed', componentId: 'comp-metric-speed' },
+            { infoItemId: 'info-fuel', componentId: 'comp-metric-fuel' }
+          ]
+        }
+      ],
+      updatedAt: Date.now()
+    },
+    library: [
+      {
+        id: 'comp-metric-alt',
+        nodeId: 'exp-node-alt',
+        name: '高度指标卡片',
+        width: 320,
+        height: 180,
+        primaryColor: '#0EA5E9',
+        sampleText: '高度 12000 ft',
+        description: '用于展示当前高度/爬升趋势的指标卡片',
+        tags: ['altitude', 'status'],
+        supportedDataTypes: ['numeric', 'text'],
+        slots: [
+          { slotName: 'title', slotType: 'label', nodeId: 'exp-node-alt-title', dataType: 'text' },
+          { slotName: 'value', slotType: 'numericValue', nodeId: 'exp-node-alt-value', dataType: 'numeric' },
+          { slotName: 'unit', slotType: 'unit', nodeId: 'exp-node-alt-unit', dataType: 'text' }
+        ],
+        lastUpdated: Date.now()
+      },
+      {
+        id: 'comp-metric-speed',
+        nodeId: 'exp-node-speed',
+        name: '速度指标卡片',
+        width: 320,
+        height: 180,
+        primaryColor: '#22C55E',
+        sampleText: '速度 245 kts',
+        description: '展示对地速度的指标卡片',
+        tags: ['speed', 'status'],
+        supportedDataTypes: ['numeric', 'trend'],
+        slots: [
+          { slotName: 'title', slotType: 'label', nodeId: 'exp-node-speed-title', dataType: 'text' },
+          { slotName: 'value', slotType: 'numericValue', nodeId: 'exp-node-speed-value', dataType: 'numeric' },
+          { slotName: 'unit', slotType: 'unit', nodeId: 'exp-node-speed-unit', dataType: 'text' }
+        ],
+        lastUpdated: Date.now()
+      },
+      {
+        id: 'comp-metric-fuel',
+        nodeId: 'exp-node-fuel',
+        name: '燃油剩余卡片',
+        width: 320,
+        height: 180,
+        primaryColor: '#F59E0B',
+        sampleText: '燃油 65 %',
+        description: '剩余燃油/续航时间的状态卡片',
+        tags: ['fuel', 'status'],
+        supportedDataTypes: ['numeric', 'state'],
+        slots: [
+          { slotName: 'title', slotType: 'label', nodeId: 'exp-node-fuel-title', dataType: 'text' },
+          { slotName: 'value', slotType: 'numericValue', nodeId: 'exp-node-fuel-value', dataType: 'numeric' }
+        ],
+        lastUpdated: Date.now()
+      },
+      {
+        id: 'comp-alert-list',
+        nodeId: 'exp-node-alerts',
+        name: '告警列表',
+        width: 360,
+        height: 220,
+        primaryColor: '#EF4444',
+        sampleText: 'APU Fault',
+        description: '按照严重度排序的告警列表，带状态色',
+        tags: ['alert', 'list'],
+        supportedDataTypes: ['alert', 'list'],
+        slots: [
+          { slotName: 'item', slotType: 'listItem', nodeId: 'exp-node-alert-item', dataType: 'alert' }
+        ],
+        lastUpdated: Date.now()
+      },
+      {
+        id: 'comp-weather',
+        nodeId: 'exp-node-weather',
+        name: '气象卡片',
+        width: 360,
+        height: 200,
+        primaryColor: '#6366F1',
+        sampleText: '前方 50km 小雨',
+        description: '前方气象与能见度概览',
+        tags: ['weather', 'text'],
+        supportedDataTypes: ['text', 'state'],
+        slots: [
+          { slotName: 'title', slotType: 'label', nodeId: 'exp-node-weather-title', dataType: 'text' },
+          { slotName: 'status', slotType: 'state', nodeId: 'exp-node-weather-state', dataType: 'state' }
+        ],
+        lastUpdated: Date.now()
+      }
+    ]
+  }
+];
+
+// -------- EXPERIMENT ENDPOINTS --------
+app.get('/api/experiments', (_req, res) => {
+  try {
+    const items = experiments.map(({ id, name, description }) => ({ id, name, description }));
+    return res.json({ items });
+  } catch (error) {
+    console.error('[experiments] list failed', error);
+    return res
+      .status(500)
+      .json({ error: 'experiments_list_failed', message: '无法加载实验场景列表' });
+  }
+});
+
+app.get('/api/experiments/:id', (req, res) => {
+  const { id } = req.params || {};
+  try {
+    const found = experiments.find((item) => item.id === id);
+    if (!found) {
+      console.warn('[experiments] not found', id);
+      return res
+        .status(404)
+        .json({ error: 'experiment_not_found', message: '未找到对应实验场景' });
+    }
+    return res.json(found);
+  } catch (error) {
+    console.error('[experiments] detail failed', id, error);
+    return res
+      .status(500)
+      .json({ error: 'experiments_detail_failed', message: '加载实验场景失败' });
+  }
+});
+
 // -------- ENRICH LIBRARY --------
 app.post('/api/enrich-library', async (req, res) => {
   if (!OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY in .env' });

@@ -44,6 +44,8 @@ type InfoBinding = { infoItemId: string; componentId?: string };
 
 type ComponentSlotType = 'label' | 'numericValue' | 'unit' | 'state' | 'alert' | 'listItem';
 type ComponentSlot = { slotName: string; nodeId: string; slotType: ComponentSlotType; dataType?: DataType };
+type ExperimentSummary = { id: string; name: string; description?: string };
+type ExperimentDetail = ExperimentSummary & { requirement: RequirementModel; library: ComponentExample[] };
 
 type GenerateDesignMessage = {
   type: 'generate-design';
@@ -85,6 +87,7 @@ type EditPageMessage = {
   provider: Provider;
 };
 type UndoEditMessage = { type: 'undo-edit' };
+type LoadExperimentMessage = { type: 'load-experiment'; experimentId: string };
 type PluginMessage =
   | GenerateDesignMessage
   | GeneratePagesMessage
@@ -102,7 +105,8 @@ type PluginMessage =
   | UpdateNoteMessage
   | RemoveComponentMessage
   | EditPageMessage
-  | UndoEditMessage;
+  | UndoEditMessage
+  | LoadExperimentMessage;
 
 type EditOperation =
   | {
@@ -226,12 +230,14 @@ const LAYOUT_KEY = `ctx:${FILE_KEY}:layouts`;
 let componentLibrary: ComponentExample[] = [];
 let requirementModel: RequirementModel | null = null;
 let lastEditBackup: { frameId: string; backupId: string } | null = null;
+let currentExperimentId: string | null = null;
 type LayoutTemplate = 'two-col' | 'three-col' | 'main-side' | 'dashboard';
 
 figma.showUI(__html__, { width: 720, height: 720 });
 
 initializeLibrary();
 initializeRequirement();
+fetchExperimentsList();
 
 figma.ui.onmessage = async (msg: PluginMessage) => {
   if (msg.type === 'generate-pages') {
@@ -260,6 +266,11 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
 
   if (msg.type === 'request-requirement') {
     sendRequirementToUI();
+    return;
+  }
+
+  if (msg.type === 'load-experiment') {
+    await handleLoadExperiment(msg.experimentId);
     return;
   }
 
@@ -1760,6 +1771,20 @@ const PARSE_BASE = API_BASE;
 const RECO_BASE = API_BASE;
 const EDIT_BASE = API_BASE;
 
+async function fetchExperimentsList() {
+  try {
+    const items = await callExperimentsList();
+    figma.ui.postMessage({ type: 'experiments-list', items });
+  } catch (error) {
+    console.error('[experiments] list failed', error);
+    figma.ui.postMessage({
+      type: 'experiments-list',
+      items: [],
+      error: getErrorMessage(error)
+    });
+  }
+}
+
 async function callParseDocument(docText: string): Promise<ParseDocResponse> {
   const response = await fetch(`${PARSE_BASE}/api/parse-doc`, {
     method: 'POST',
@@ -1818,6 +1843,25 @@ async function callEnrichLibrary(
   return JSON.parse(raw) as EnrichLibraryResponse;
 }
 
+async function callExperimentsList(): Promise<ExperimentSummary[]> {
+  const response = await fetch(`${API_BASE}/api/experiments`);
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`实验场景列表获取失败 (${response.status}): ${truncate(raw)}`);
+  }
+  const data = JSON.parse(raw);
+  return Array.isArray(data?.items) ? (data.items as ExperimentSummary[]) : [];
+}
+
+async function callExperimentDetail(experimentId: string): Promise<ExperimentDetail> {
+  const response = await fetch(`${API_BASE}/api/experiments/${encodeURIComponent(experimentId)}`);
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`实验场景获取失败 (${response.status}): ${truncate(raw)}`);
+  }
+  return JSON.parse(raw) as ExperimentDetail;
+}
+
 async function callEditPage(payload: EditPageRequest): Promise<EditApiResponse> {
   const response = await fetch(`${EDIT_BASE}/api/edit-page`, {
     method: 'POST',
@@ -1833,6 +1877,38 @@ async function callEditPage(payload: EditPageRequest): Promise<EditApiResponse> 
     throw new Error('编辑接口返回格式不正确');
   }
   return data;
+}
+
+async function handleLoadExperiment(experimentId: string) {
+  const id = (experimentId || '').trim();
+  if (!id) {
+    figma.ui.postMessage({ type: 'load-experiment-error', message: '缺少实验场景 ID' });
+    return;
+  }
+  try {
+    const detail = await callExperimentDetail(id);
+    const nextRequirement = {
+      ...detail.requirement,
+      updatedAt: detail.requirement?.updatedAt ?? Date.now()
+    } as RequirementModel;
+    await persistRequirement(nextRequirement);
+    sendRequirementToUI();
+    componentLibrary = Array.isArray(detail.library) ? detail.library : [];
+    await persistLibrary();
+    currentExperimentId = detail.id;
+    figma.ui.postMessage({
+      type: 'experiment-loaded',
+      id: detail.id,
+      name: detail.name,
+      description: detail.description
+    });
+  } catch (error) {
+    console.error('[experiments] load failed', error);
+    figma.ui.postMessage({
+      type: 'load-experiment-error',
+      message: getErrorMessage(error)
+    });
+  }
 }
 
 async function handleParseDocument(docText: string) {

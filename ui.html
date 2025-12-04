@@ -219,6 +219,42 @@
         grid-template-columns: 1fr 1fr;
         gap: 6px;
       }
+      .exp-list {
+        display: grid;
+        gap: 6px;
+        margin-top: 6px;
+      }
+      .exp-item {
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        padding: 8px;
+        background: #fff;
+        display: grid;
+        grid-template-columns: 18px 1fr;
+        gap: 8px;
+        align-items: flex-start;
+      }
+      .exp-title {
+        font-weight: 600;
+      }
+      .exp-desc {
+        font-size: 11px;
+        color: #4b5563;
+        margin-top: 2px;
+      }
+      .exp-meta {
+        font-size: 11px;
+        color: #6b7280;
+        margin-top: 2px;
+      }
+      .exp-empty {
+        color: #6b7280;
+        font-size: 12px;
+        border: 1px dashed #e5e7eb;
+        background: #fafafa;
+        padding: 8px;
+        border-radius: 6px;
+      }
       .req-list {
         max-height: 200px;
         overflow: auto;
@@ -317,6 +353,7 @@
   <body>
     <div class="tabs">
       <button class="tab-btn active" data-tab="generateTab">生成 / 配置</button>
+      <button class="tab-btn" data-tab="experimentTab">实验模式</button>
       <button class="tab-btn" data-tab="editTab">UI 编辑</button>
     </div>
 
@@ -413,6 +450,18 @@
       <div id="status" class="status"></div>
     </div>
 
+    <div id="experimentTab" class="tab-panel">
+      <div class="section">
+        <h3>实验模式</h3>
+        <div class="summary">选择预设场景，一键加载需求模型与组件库</div>
+        <div id="experimentList" class="exp-list"></div>
+        <div class="row" style="margin-top: 8px; justify-content: space-between; align-items: center">
+          <div id="experimentStatus" class="summary"></div>
+          <button id="loadExperimentBtn" style="width: auto">加载场景</button>
+        </div>
+      </div>
+    </div>
+
     <div id="editTab" class="tab-panel">
       <div class="section">
         <h3>UI 编辑（单页面）</h3>
@@ -478,14 +527,22 @@
       const tabButtons = Array.from(document.querySelectorAll('.tab-btn'));
       const tabPanels = {
         generateTab: document.getElementById('generateTab'),
+        experimentTab: document.getElementById('experimentTab'),
         editTab: document.getElementById('editTab')
       };
+      const experimentListEl = document.getElementById('experimentList');
+      const loadExperimentBtn = document.getElementById('loadExperimentBtn');
+      const experimentStatusEl = document.getElementById('experimentStatus');
       let library = [];
       let requirement = null;
+      let experiments = [];
       let slotState = null;
       let slotFilter = '';
       let selectedPageId = null;
       const selectedPageIds = new Set();
+      let selectedExperimentId = null;
+      let experimentLoading = false;
+      let loadedExperimentName = '';
       const DATA_TYPES = ['numeric', 'trend', 'alert', 'state', 'text', 'map', 'list'];
       const SLOT_TYPES = ['label', 'numericValue', 'unit', 'state', 'alert', 'listItem'];
 
@@ -506,6 +563,69 @@
         if (isLoading) {
           editStatusEl.textContent = '正在生成编辑方案…';
           editStatusEl.dataset.state = 'loading';
+        }
+      };
+
+      const setExperimentLoading = (isLoading) => {
+        experimentLoading = isLoading;
+        if (loadExperimentBtn) {
+          loadExperimentBtn.disabled = isLoading || !selectedExperimentId;
+          loadExperimentBtn.textContent = isLoading ? '加载中…' : '加载场景';
+        }
+      };
+
+      const renderExperiments = () => {
+        if (!experimentListEl) return;
+        experimentListEl.innerHTML = '';
+        if (!experiments.length) {
+          const empty = document.createElement('div');
+          empty.className = 'exp-empty';
+          empty.textContent = '当前无可用实验场景';
+          experimentListEl.appendChild(empty);
+          if (loadExperimentBtn) loadExperimentBtn.disabled = true;
+          return;
+        }
+        if (!selectedExperimentId) {
+          selectedExperimentId = experiments[0].id;
+        }
+        experiments.forEach((exp) => {
+          const row = document.createElement('label');
+          row.className = 'exp-item';
+          const radio = document.createElement('input');
+          radio.type = 'radio';
+          radio.name = 'experiment';
+          radio.value = exp.id;
+          radio.checked = exp.id === selectedExperimentId;
+          radio.onchange = () => {
+            selectedExperimentId = exp.id;
+            setExperimentLoading(false);
+            renderExperiments();
+          };
+
+          const body = document.createElement('div');
+          const title = document.createElement('div');
+          title.className = 'exp-title';
+          title.textContent = exp.name || exp.id;
+          const desc = document.createElement('div');
+          desc.className = 'exp-desc';
+          desc.textContent = exp.description || '无描述';
+          const meta = document.createElement('div');
+          meta.className = 'exp-meta';
+          meta.textContent = `ID: ${exp.id}`;
+          body.appendChild(title);
+          body.appendChild(desc);
+          body.appendChild(meta);
+
+          row.appendChild(radio);
+          row.appendChild(body);
+          experimentListEl.appendChild(row);
+        });
+        if (loadExperimentBtn) {
+          loadExperimentBtn.disabled = experimentLoading || !selectedExperimentId;
+          loadExperimentBtn.textContent = experimentLoading ? '加载中…' : '加载场景';
+        }
+        if (experimentStatusEl && loadedExperimentName) {
+          experimentStatusEl.textContent = `已加载：${loadedExperimentName}`;
         }
       };
 
@@ -704,6 +824,18 @@
         const docText = docTextEl.value;
         parent.postMessage({ pluginMessage: { type: 'parse-doc', docText } }, '*');
       };
+
+      if (loadExperimentBtn) {
+        loadExperimentBtn.onclick = () => {
+          if (!selectedExperimentId || experimentLoading) return;
+          setExperimentLoading(true);
+          if (experimentStatusEl) experimentStatusEl.textContent = '加载中…';
+          parent.postMessage(
+            { pluginMessage: { type: 'load-experiment', experimentId: selectedExperimentId } },
+            '*'
+          );
+        };
+      }
 
       saveReqBtn.onclick = () => {
         if (!requirement) return;
@@ -958,10 +1090,48 @@
       parent.postMessage({ pluginMessage: { type: 'request-library' } }, '*');
       parent.postMessage({ pluginMessage: { type: 'request-requirement' } }, '*');
       renderEditOps([], '');
+      renderExperiments();
 
       window.onmessage = (event) => {
         const msg = event.data.pluginMessage;
         if (!msg) return;
+
+        if (msg.type === 'experiments-list') {
+          experiments = Array.isArray(msg.items) ? msg.items : [];
+          const prevSelected = selectedExperimentId;
+          selectedExperimentId =
+            experiments.find((e) => e.id === prevSelected)?.id ||
+            (experiments[0] ? experiments[0].id : null);
+          if (experimentStatusEl) {
+            if (msg.error) {
+              experimentStatusEl.textContent = `加载失败：${msg.error}`;
+            } else if (experiments.length) {
+              experimentStatusEl.textContent = `已同步 ${experiments.length} 个场景`;
+            } else {
+              experimentStatusEl.textContent = '当前无可用实验场景';
+            }
+          }
+          setExperimentLoading(false);
+          renderExperiments();
+          return;
+        }
+
+        if (msg.type === 'experiment-loaded') {
+          loadedExperimentName = msg.name || msg.id;
+          setExperimentLoading(false);
+          if (experimentStatusEl) {
+            experimentStatusEl.textContent = `已加载场景：${loadedExperimentName}`;
+          }
+          return;
+        }
+
+        if (msg.type === 'load-experiment-error') {
+          setExperimentLoading(false);
+          if (experimentStatusEl) {
+            experimentStatusEl.textContent = `加载失败：${msg.message || '请稍后重试'}`;
+          }
+          return;
+        }
 
         if (msg.type === 'library') {
           library = msg.items || [];
