@@ -514,10 +514,12 @@ async function handleEditPage(msg: EditPageMessage) {
       throw new Error('模型未返回操作');
     }
     await loadFonts();
-    storeEditBackup(frame);
-    const applied = applyEditOperations(frame, operations);
-    figma.currentPage.selection = [frame];
-    figma.viewport.scrollAndZoomIntoView([frame]);
+    const { clone, idMap } = cloneFrameWithMapping(frame);
+    await storeEditBackup(clone);
+    const remapped = remapOperations(operations, idMap);
+    const applied = applyEditOperations(clone, remapped);
+    figma.currentPage.selection = [clone];
+    figma.viewport.scrollAndZoomIntoView([clone]);
     figma.ui.postMessage({ type: 'edit-ops', operations: applied, summary: result.summary });
     figma.notify('页面已更新');
     sendEditStatus('success', '编辑完成');
@@ -535,11 +537,11 @@ async function handleUndoEdit() {
     sendEditStatus('error', '无可恢复的内容');
     return;
   }
-  const backup = figma.getNodeById(lastEditBackup.backupId) as FrameNode | null;
-  const target = figma.getNodeById(lastEditBackup.frameId) as FrameNode | null;
+  const backup = (await figma.getNodeByIdAsync(lastEditBackup.backupId)) as FrameNode | null;
+  const target = (await figma.getNodeByIdAsync(lastEditBackup.frameId)) as FrameNode | null;
   if (!backup || backup.type !== 'FRAME') {
     figma.notify('未找到备份');
-    cleanupEditBackup();
+    await cleanupEditBackup();
     sendEditStatus('error', '备份已丢失');
     return;
   }
@@ -547,7 +549,7 @@ async function handleUndoEdit() {
   if (!parent || typeof (parent as ChildrenMixin).appendChild !== 'function') {
     figma.notify('无法恢复页面');
     sendEditStatus('error', '无法恢复页面');
-    cleanupEditBackup();
+    await cleanupEditBackup();
     return;
   }
   const insertIndex = target ? parent.children.indexOf(target) : parent.children.length;
@@ -564,7 +566,7 @@ async function handleUndoEdit() {
   figma.viewport.scrollAndZoomIntoView([backup]);
   figma.notify('已恢复到上一次编辑前');
   sendEditStatus('success', '已恢复到上一次编辑前');
-  cleanupEditBackup();
+  await cleanupEditBackup();
   sendEditStatus('idle');
 }
 
@@ -653,8 +655,8 @@ function createBindingNode(
   return placeholder;
 }
 
-function storeEditBackup(frame: FrameNode) {
-  cleanupEditBackup();
+async function storeEditBackup(frame: FrameNode) {
+  await cleanupEditBackup();
   const clone = frame.clone();
   clone.visible = false;
   clone.locked = true;
@@ -670,9 +672,9 @@ function storeEditBackup(frame: FrameNode) {
   lastEditBackup = { frameId: frame.id, backupId: clone.id };
 }
 
-function cleanupEditBackup() {
+async function cleanupEditBackup() {
   if (!lastEditBackup?.backupId) return;
-  const node = figma.getNodeById(lastEditBackup.backupId);
+  const node = await figma.getNodeByIdAsync(lastEditBackup.backupId);
   if (node && 'remove' in node) {
     node.remove();
   }
@@ -1312,6 +1314,52 @@ function buildFrameSnapshot(frame: FrameNode): SerializedNode {
     return snap;
   };
   return walk(frame) as SerializedNode;
+}
+
+function cloneFrameWithMapping(frame: FrameNode): { clone: FrameNode; idMap: Map<string, string> } {
+  const clone = frame.clone();
+  // place clone to the right
+  clone.x = frame.x + frame.width + 80;
+  clone.y = frame.y;
+  if (frame.parent && 'appendChild' in frame.parent) {
+    (frame.parent as ChildrenMixin).appendChild(clone);
+  } else {
+    figma.currentPage.appendChild(clone);
+  }
+
+  const idMap = new Map<string, string>();
+  const walk = (source: SceneNode, target: SceneNode) => {
+    idMap.set(source.id, target.id);
+    if ('children' in source && 'children' in target) {
+      const sourceChildren = (source as ChildrenMixin).children || [];
+      const targetChildren = (target as ChildrenMixin).children || [];
+      const len = Math.min(sourceChildren.length, targetChildren.length);
+      for (let i = 0; i < len; i += 1) {
+        walk(sourceChildren[i] as SceneNode, targetChildren[i] as SceneNode);
+      }
+    }
+  };
+  walk(frame, clone);
+  return { clone, idMap };
+}
+
+function remapOperations(ops: EditOperation[], idMap: Map<string, string>): EditOperation[] {
+  return ops.map((op) => {
+    const mapId = (id?: string) => (id && idMap.has(id) ? (idMap.get(id) as string) : id);
+    if (op.op === 'update') {
+      return { ...op, targetId: mapId(op.targetId) as string };
+    }
+    if (op.op === 'remove') {
+      return { ...op, targetId: mapId(op.targetId) as string };
+    }
+    if (op.op === 'reorder') {
+      return { ...op, targetId: mapId(op.targetId) as string, parentId: mapId(op.parentId) };
+    }
+    if (op.op === 'add-text' || op.op === 'add-rectangle') {
+      return { ...op, parentId: mapId(op.parentId) };
+    }
+    return op;
+  });
 }
 
 function applyEditOperations(frame: FrameNode, operations: EditOperation[]) {
