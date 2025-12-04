@@ -246,6 +246,33 @@
         gap: 6px;
         margin-top: 6px;
       }
+      .preview-box {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        aspect-ratio: 16 / 9;
+        border: 1px dashed #d1d5db;
+        border-radius: 8px;
+        background: #f9fafb;
+        overflow: hidden;
+        margin-top: 8px;
+      }
+      .preview-region {
+        position: absolute;
+        border: 1px solid #94a3b8;
+        background: rgba(148, 163, 184, 0.12);
+        border-radius: 6px;
+        font-size: 10px;
+        color: #0f172a;
+        padding: 4px;
+        box-sizing: border-box;
+        overflow: hidden;
+      }
+      .preview-region strong {
+        display: block;
+        margin-bottom: 2px;
+        font-size: 11px;
+      }
       .exp-item {
         border: 1px solid #e5e7eb;
         border-radius: 6px;
@@ -468,6 +495,45 @@
           </label>
           <button id="run">生成到画布</button>
         </div>
+        <div class="section" style="margin-top: 8px; border-style: dashed">
+          <h3 style="margin-top: 0">智能布局（大模型）</h3>
+          <div class="two-col">
+            <div>
+              <label>布局模式</label>
+              <select id="layoutMode">
+                <option value="basic">基础网格</option>
+                <option value="smart">智能布局</option>
+              </select>
+            </div>
+            <div>
+              <label>屏幕类型</label>
+              <select id="screenType">
+                <option value="dashboard">通用仪表盘</option>
+                <option value="factory">工厂总览</option>
+                <option value="hud">飞行 HUD</option>
+                <option value="ops">运维监控</option>
+              </select>
+            </div>
+          </div>
+          <div class="two-col" style="margin-top: 6px">
+            <div>
+              <label>背景图（可选）</label>
+              <div class="row" style="gap: 6px; align-items: center">
+                <button id="pickBackgroundBtn" style="width: auto">使用选中节点</button>
+                <span id="backgroundPreview" class="summary"></span>
+              </div>
+            </div>
+            <div>
+              <label>布局操作</label>
+              <div class="row" style="gap: 6px">
+                <button id="generatePlanBtn" style="width: auto">生成布局草案</button>
+                <button id="applyPlanBtn" style="width: auto">生成到画布</button>
+              </div>
+              <div id="layoutPlanStatus" class="summary"></div>
+            </div>
+          </div>
+          <div id="layoutPreview" class="preview-box"></div>
+        </div>
       </div>
       <div id="status" class="status"></div>
     </div>
@@ -530,6 +596,14 @@
       const reqSummaryEl = document.getElementById('reqSummary');
       const providerEl = document.getElementById('provider');
       const promptEl = document.getElementById('prompt');
+      const layoutModeEl = document.getElementById('layoutMode');
+      const screenTypeEl = document.getElementById('screenType');
+      const pickBackgroundBtn = document.getElementById('pickBackgroundBtn');
+      const backgroundPreviewEl = document.getElementById('backgroundPreview');
+      const layoutPlanStatusEl = document.getElementById('layoutPlanStatus');
+      const layoutPreviewEl = document.getElementById('layoutPreview');
+      const generatePlanBtn = document.getElementById('generatePlanBtn');
+      const applyPlanBtn = document.getElementById('applyPlanBtn');
       const exportWrap = document.getElementById('exportWrap');
       const exportText = document.getElementById('exportText');
       const copyExportBtn = document.getElementById('copyExport');
@@ -576,6 +650,9 @@
       const DYNAMIC_BEHAVIORS = ['static', 'frequent-update', 'event-driven'];
       const LAYOUT_ROLES = ['hero', 'summary', 'sidebar', 'toolbar', 'inline'];
       const VIEWPORT_ZONES = ['top-left', 'top', 'center', 'bottom', 'any'];
+      let layoutPlan = null;
+      let backgroundNodeId = null;
+      if (applyPlanBtn) applyPlanBtn.disabled = true;
 
       const updateComponentMeta = (id, payload) => {
         parent.postMessage({ pluginMessage: { type: 'update-component-meta', id, ...payload } }, '*');
@@ -617,6 +694,19 @@
           editStatusEl.dataset.state = 'loading';
         }
       };
+
+      if (layoutModeEl) {
+        layoutModeEl.onchange = () => {
+          if (layoutModeEl.value !== 'smart') {
+            layoutPlanStatusEl.textContent = '基础模式下可直接使用基础生成按钮';
+            layoutPlan = null;
+            renderLayoutPreview(null);
+            if (applyPlanBtn) applyPlanBtn.disabled = true;
+          } else {
+            layoutPlanStatusEl.textContent = '选择页面后生成布局草案';
+          }
+        };
+      }
 
       const setExperimentLoading = (isLoading) => {
         experimentLoading = isLoading;
@@ -679,6 +769,28 @@
         if (experimentStatusEl && loadedExperimentName) {
           experimentStatusEl.textContent = `已加载：${loadedExperimentName}`;
         }
+      };
+
+      const renderLayoutPreview = (plan) => {
+        if (!layoutPreviewEl) return;
+        layoutPreviewEl.innerHTML = '';
+        if (!plan || !Array.isArray(plan.regions)) {
+          layoutPreviewEl.textContent = '暂无布局方案';
+          return;
+        }
+        plan.regions.forEach((region) => {
+          const div = document.createElement('div');
+          div.className = 'preview-region';
+          div.style.left = `${region.x * 100}%`;
+          div.style.top = `${region.y * 100}%`;
+          div.style.width = `${region.width * 100}%`;
+          div.style.height = `${region.height * 100}%`;
+          div.innerHTML = `<strong>${region.name || region.id}</strong>${(region.items || [])
+            .slice(0, 3)
+            .map((it) => it.infoItemId)
+            .join(' · ')}`;
+          layoutPreviewEl.appendChild(div);
+        });
       };
 
       const renderEditOps = (ops = [], summary = '') => {
@@ -1026,6 +1138,52 @@
         parent.postMessage({ pluginMessage: { type: 'enrich-library' } }, '*');
       };
 
+      if (pickBackgroundBtn) {
+        pickBackgroundBtn.onclick = () => {
+          parent.postMessage({ pluginMessage: { type: 'set-background-from-selection' } }, '*');
+        };
+      }
+
+      if (generatePlanBtn) {
+        generatePlanBtn.onclick = () => {
+          if (layoutModeEl.value !== 'smart') {
+            layoutPlanStatusEl.textContent = '请切换到智能布局模式';
+            return;
+          }
+          if (!selectedPageId) {
+            layoutPlanStatusEl.textContent = '请先选择页面';
+            return;
+          }
+          layoutPlanStatusEl.textContent = '生成布局方案中…';
+          parent.postMessage(
+            {
+              pluginMessage: {
+                type: 'generate-layout-plan',
+                pageId: selectedPageId,
+                screenType: screenTypeEl.value,
+                backgroundNodeId
+              }
+            },
+            '*'
+          );
+        };
+      }
+
+      if (applyPlanBtn) {
+        applyPlanBtn.onclick = () => {
+          if (layoutModeEl.value !== 'smart') {
+            layoutPlanStatusEl.textContent = '当前为基础模式，请使用基础生成按钮';
+            return;
+          }
+          if (!layoutPlan) {
+            layoutPlanStatusEl.textContent = '请先生成布局方案';
+            return;
+          }
+          layoutPlanStatusEl.textContent = '正在生成到画布…';
+          parent.postMessage({ pluginMessage: { type: 'apply-layout-plan' } }, '*');
+        };
+      }
+
       parseDocBtn.onclick = () => {
         const docText = docTextEl.value;
         parent.postMessage({ pluginMessage: { type: 'parse-doc', docText } }, '*');
@@ -1297,6 +1455,7 @@
       parent.postMessage({ pluginMessage: { type: 'request-requirement' } }, '*');
       renderEditOps([], '');
       renderExperiments();
+      renderLayoutPreview(null);
 
       window.onmessage = (event) => {
         const msg = event.data.pluginMessage;
@@ -1336,6 +1495,36 @@
           if (experimentStatusEl) {
             experimentStatusEl.textContent = `加载失败：${msg.message || '请稍后重试'}`;
           }
+          return;
+        }
+
+        if (msg.type === 'layout-plan') {
+          layoutPlan = msg.plan || null;
+          layoutPlanStatusEl.textContent = '已生成布局方案';
+          renderLayoutPreview(layoutPlan);
+          if (applyPlanBtn) applyPlanBtn.disabled = false;
+          return;
+        }
+
+        if (msg.type === 'layout-plan-error') {
+          layoutPlanStatusEl.textContent = `布局方案失败：${msg.message || ''}`;
+          if (applyPlanBtn) applyPlanBtn.disabled = true;
+          return;
+        }
+
+        if (msg.type === 'layout-plan-applied') {
+          layoutPlanStatusEl.textContent = '已生成到画布';
+          return;
+        }
+
+        if (msg.type === 'background-selected') {
+          backgroundNodeId = msg.nodeId;
+          backgroundPreviewEl.textContent = `已选：${msg.name || msg.nodeId}`;
+          return;
+        }
+
+        if (msg.type === 'background-select-error') {
+          backgroundPreviewEl.textContent = msg.message || '无法选中背景节点';
           return;
         }
 

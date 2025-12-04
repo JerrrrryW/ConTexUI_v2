@@ -4,6 +4,7 @@ type StatusMessage = {
   state: 'loading' | 'idle' | 'success' | 'error';
   message?: string;
 };
+declare const atob: (data: string) => string;
 
 type Phase = { id: string; name: string; description?: string };
 type Role = { id: string; name: string; description?: string };
@@ -70,6 +71,33 @@ type LayerStats = {
   colorChannelCount?: number;
 };
 type InteractionSupport = string;
+type SlotBinding = { slotName: string; content: string };
+type LayoutRegion = {
+  id: string;
+  name: string;
+  role?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  layout?: 'vertical' | 'horizontal' | 'grid';
+  columns?: number;
+  items: {
+    infoItemId: string;
+    componentId?: string | null;
+    slotBindings?: SlotBinding[];
+  }[];
+};
+type LayoutPlan = {
+  screen: {
+    width: number;
+    height: number;
+    background?: { required?: boolean; hint?: string; nodeId?: string };
+  };
+  screenType?: string;
+  regions: LayoutRegion[];
+  componentDefaults?: Record<string, string | null | undefined>;
+};
 type ExperimentSummary = { id: string; name: string; description?: string };
 type ExperimentDetail = ExperimentSummary & { requirement: RequirementModel; library: ComponentExample[] };
 
@@ -125,6 +153,14 @@ type EditPageMessage = {
 };
 type UndoEditMessage = { type: 'undo-edit' };
 type LoadExperimentMessage = { type: 'load-experiment'; experimentId: string };
+type GenerateLayoutPlanMessage = {
+  type: 'generate-layout-plan';
+  pageId: string;
+  screenType?: string;
+  backgroundNodeId?: string;
+};
+type ApplyLayoutPlanMessage = { type: 'apply-layout-plan' };
+type SetBackgroundFromSelectionMessage = { type: 'set-background-from-selection' };
 type PluginMessage =
   | GenerateDesignMessage
   | GeneratePagesMessage
@@ -143,7 +179,10 @@ type PluginMessage =
   | RemoveComponentMessage
   | EditPageMessage
   | UndoEditMessage
-  | LoadExperimentMessage;
+  | LoadExperimentMessage
+  | GenerateLayoutPlanMessage
+  | ApplyLayoutPlanMessage
+  | SetBackgroundFromSelectionMessage;
 
 type EditOperation =
   | {
@@ -285,6 +324,9 @@ let componentLibrary: ComponentExample[] = [];
 let requirementModel: RequirementModel | null = null;
 let lastEditBackup: { frameId: string; backupId: string } | null = null;
 let currentExperimentId: string | null = null;
+let lastLayoutPlan: LayoutPlan | null = null;
+let lastLayoutPlanPageId: string | null = null;
+let lastBackgroundNodeId: string | null = null;
 type LayoutTemplate = 'two-col' | 'three-col' | 'main-side' | 'dashboard';
 
 const DEFAULT_LAYER_STATS: LayerStats = {
@@ -465,6 +507,21 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
 
   if (msg.type === 'load-experiment') {
     await handleLoadExperiment(msg.experimentId);
+    return;
+  }
+
+  if (msg.type === 'generate-layout-plan') {
+    await handleGenerateLayoutPlan(msg);
+    return;
+  }
+
+  if (msg.type === 'apply-layout-plan') {
+    await handleApplyLayoutPlan();
+    return;
+  }
+
+  if (msg.type === 'set-background-from-selection') {
+    await handleSetBackgroundFromSelection();
     return;
   }
 
@@ -1456,6 +1513,270 @@ function buildPageFrame(
   return frame;
 }
 
+async function applyLayoutPlanToCanvas(plan: LayoutPlan, page: PageDefinition) {
+  await loadFonts();
+  const screen = figma.createFrame();
+  screen.name = `${page.name || 'Screen'} · 智能布局`;
+  screen.resize(plan.screen.width || 1920, plan.screen.height || 1080);
+  screen.clipsContent = false;
+  screen.fills = [];
+  const bgNodeId = plan.screen.background?.nodeId || lastBackgroundNodeId;
+  const appliedBg = await applyBackgroundFillFromNode(bgNodeId, screen);
+  if (!appliedBg) {
+    screen.fills = [{ type: 'SOLID', color: hexToRgb('#0F172A') }];
+  }
+
+  const ids = new Set<string>();
+  plan.regions.forEach((region) => {
+    region.items.forEach((item) => {
+      if (item.componentId) ids.add(item.componentId);
+    });
+  });
+  if (plan.componentDefaults) {
+    Object.keys(plan.componentDefaults).forEach((key) => {
+      const id = (plan.componentDefaults as Record<string, string | null | undefined>)[key];
+      if (id) ids.add(id);
+    });
+  }
+  const componentMap = await loadComponentsByIds(Array.from(ids));
+  const padding = 16;
+
+  plan.regions.forEach((region) => {
+    const frame = figma.createFrame();
+    frame.name = region.name || region.id;
+    frame.x = Math.round(screen.width * region.x);
+    frame.y = Math.round(screen.height * region.y);
+    frame.resize(
+      Math.round(screen.width * region.width),
+      Math.round(screen.height * region.height)
+    );
+    frame.clipsContent = false;
+    frame.paddingLeft = padding;
+    frame.paddingRight = padding;
+    frame.paddingTop = padding;
+    frame.paddingBottom = padding;
+    frame.itemSpacing = 12;
+
+    if (region.layout === 'horizontal') {
+      frame.layoutMode = 'HORIZONTAL';
+      frame.primaryAxisSizingMode = 'AUTO';
+      frame.counterAxisSizingMode = 'AUTO';
+    } else if (region.layout === 'vertical') {
+      frame.layoutMode = 'VERTICAL';
+      frame.primaryAxisSizingMode = 'AUTO';
+      frame.counterAxisSizingMode = 'AUTO';
+    } else {
+      frame.layoutMode = 'NONE';
+    }
+
+    const regionInfoItems = region.items || [];
+    if (region.layout === 'grid') {
+      frame.layoutMode = 'NONE';
+      const cols = Math.max(1, region.columns || 2);
+      const gap = 12;
+      const cardWidth = (frame.width - padding * 2 - gap * (cols - 1)) / cols;
+      const cardHeight = Math.min(260, frame.height - padding * 2);
+      let col = 0;
+      let row = 0;
+      regionInfoItems.forEach((item) => {
+        const compNode = getComponentNodeForItem(item, plan, componentMap, regionInfoItems);
+        const clone = cloneComponentWithSlots(compNode, item, plan, componentLibrary);
+        if ('resize' in clone && typeof clone.resize === 'function') {
+          try {
+            (clone as LayoutMixin).resize(cardWidth, cardHeight);
+          } catch (_error) {
+            // ignore
+          }
+        }
+        clone.x = padding + col * (cardWidth + gap);
+        clone.y = padding + row * (cardHeight + gap);
+        frame.appendChild(clone);
+        col += 1;
+        if (col >= cols) {
+          col = 0;
+          row += 1;
+        }
+      });
+    } else if (frame.layoutMode !== 'NONE') {
+      regionInfoItems.forEach((item) => {
+        const compNode = getComponentNodeForItem(item, plan, componentMap, regionInfoItems);
+        const clone = cloneComponentWithSlots(compNode, item, plan, componentLibrary);
+        if ('layoutAlign' in clone) {
+          (clone as LayoutMixin).layoutAlign = 'STRETCH';
+        }
+        frame.appendChild(clone);
+      });
+    } else {
+      // absolute fallback
+      let y = padding;
+      const gap = 12;
+      regionInfoItems.forEach((item) => {
+        const compNode = getComponentNodeForItem(item, plan, componentMap, regionInfoItems);
+        const clone = cloneComponentWithSlots(compNode, item, plan, componentLibrary);
+        clone.x = padding;
+        clone.y = y;
+        y += clone.height + gap;
+        frame.appendChild(clone);
+      });
+    }
+
+    screen.appendChild(frame);
+  });
+
+  figma.currentPage.appendChild(screen);
+  figma.currentPage.selection = [screen];
+  figma.viewport.scrollAndZoomIntoView([screen]);
+}
+
+function getComponentNodeForItem(
+  item: LayoutRegion['items'][number],
+  plan: LayoutPlan,
+  componentMap: Map<string, SceneNode>,
+  items: LayoutRegion['items']
+): SceneNode | null {
+  const info = requirementModel?.infoItems.find((i) => i.id === item.infoItemId);
+  const dataType = info?.dataType || 'text';
+  const preferred =
+    item.componentId ||
+    plan.componentDefaults?.[dataType] ||
+    plan.componentDefaults?.[info?.dataType || ''] ||
+    null;
+  if (preferred && componentMap.has(preferred)) return componentMap.get(preferred) as SceneNode;
+  const existing = componentLibrary.find((c) => c.id === preferred);
+  if (existing) {
+    // try reload
+    return null;
+  }
+  // fallback: try first component in library
+  if (componentLibrary[0]) {
+    const node = componentMap.get(componentLibrary[0].id);
+    if (node) return node;
+  }
+  return null;
+}
+
+function cloneComponentWithSlots(
+  source: SceneNode | null,
+  item: LayoutRegion['items'][number],
+  plan: LayoutPlan,
+  library: ComponentExample[]
+): FrameNode | SceneNode {
+  const info = requirementModel?.infoItems.find((i) => i.id === item.infoItemId);
+  const infoName = info?.name || item.infoItemId;
+  if (!source) {
+    const placeholder = figma.createFrame();
+    placeholder.name = `占位 · ${infoName}`;
+    placeholder.layoutMode = 'VERTICAL';
+    placeholder.primaryAxisSizingMode = 'AUTO';
+    placeholder.counterAxisSizingMode = 'AUTO';
+    placeholder.paddingLeft = 12;
+    placeholder.paddingRight = 12;
+    placeholder.paddingTop = 10;
+    placeholder.paddingBottom = 10;
+    placeholder.itemSpacing = 6;
+    placeholder.strokes = [{ type: 'SOLID', color: hexToRgb('#F59E0B') }];
+    placeholder.strokeWeight = 1;
+    placeholder.fills = [{ type: 'SOLID', color: hexToRgb('#FFF7ED') }];
+    const title = createTextNode({ type: 'text', label: infoName, color: '#9A3412', size: 12 });
+    placeholder.appendChild(title);
+    const desc = createTextNode({
+      type: 'text',
+      label: info?.description || '未绑定组件',
+      color: '#9A3412',
+      size: 11
+    });
+    placeholder.appendChild(desc);
+    return placeholder;
+  }
+
+  const { clone, idMap } = cloneNodeWithMap(source);
+  const compMeta = library.find((c) => c.id === (item.componentId || '') || c.nodeId === source.id);
+  applySlotBindings(clone, compMeta, idMap, item.slotBindings || [], infoName, info?.description);
+  return clone;
+}
+
+function cloneNodeWithMap(node: SceneNode): { clone: SceneNode; idMap: Map<string, string> } {
+  const clone = node.clone();
+  const idMap = new Map<string, string>();
+  const walk = (a: SceneNode, b: SceneNode) => {
+    idMap.set(a.id, b.id);
+    if ('children' in a && 'children' in b) {
+      const aChildren = (a as ChildrenMixin).children || [];
+      const bChildren = (b as ChildrenMixin).children || [];
+      const len = Math.min(aChildren.length, bChildren.length);
+      for (let i = 0; i < len; i += 1) {
+        walk(aChildren[i] as SceneNode, bChildren[i] as SceneNode);
+      }
+    }
+  };
+  walk(node, clone);
+  return { clone, idMap };
+}
+
+function applySlotBindings(
+  clone: SceneNode,
+  compMeta: ComponentExample | undefined,
+  idMap: Map<string, string>,
+  bindings: SlotBinding[],
+  fallbackTitle?: string,
+  fallbackDesc?: string
+) {
+  if (!compMeta || !Array.isArray(compMeta.slots) || !compMeta.slots.length) return;
+  const byName = new Map<string, ComponentSlot>();
+  compMeta.slots.forEach((s) => byName.set(s.slotName, s));
+  const setText = (nodeId: string, content: string) => {
+    if ('findOne' in clone) {
+      const target = (clone as ChildrenMixin).findOne((n) => (n as SceneNode).id === nodeId);
+      if (target && target.type === 'TEXT') {
+        ensureTextFontLoaded(target as TextNode);
+        (target as TextNode).characters = content;
+      }
+    }
+  };
+  bindings.forEach((b) => {
+    const slot = byName.get(b.slotName);
+    if (!slot) return;
+    const mappedId = idMap.get(slot.nodeId) || slot.nodeId;
+    setText(mappedId, b.content);
+  });
+  if (!bindings.length && fallbackTitle) {
+    const titleSlot = compMeta.slots.find((s) => s.slotType === 'label' || s.slotName === 'title');
+    if (titleSlot) {
+      const mappedId = idMap.get(titleSlot.nodeId) || titleSlot.nodeId;
+      setText(mappedId, fallbackTitle);
+    }
+    const valueSlot = compMeta.slots.find((s) => s.slotType === 'numericValue');
+    if (valueSlot && fallbackDesc) {
+      const mappedId = idMap.get(valueSlot.nodeId) || valueSlot.nodeId;
+      setText(mappedId, fallbackDesc);
+    }
+  }
+}
+
+function ensureTextFontLoaded(text: TextNode) {
+  try {
+    text.fontName = activeFont;
+  } catch (_error) {
+    // ignore
+  }
+}
+
+async function applyBackgroundFillFromNode(nodeId: string | null | undefined, target: FrameNode) {
+  if (!nodeId) return false;
+  const node = (await figma.getNodeByIdAsync(nodeId)) as SceneNode | null;
+  if (node && 'fills' in node) {
+    const fills = (node as GeometryMixin).fills;
+    if (Array.isArray(fills) && fills.length) {
+      try {
+        (target as GeometryMixin).fills = JSON.parse(JSON.stringify(fills)) as Paint[];
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+  }
+  return false;
+}
 function createComponentNode(layer: LayerSpec, componentMap: Map<string, SceneNode>): SceneNode {
   const sourceId =
     layer.componentId || findComponentIdByName(layer.componentName || layer.label || '');
@@ -2032,6 +2353,7 @@ type EditPageRequest = {
   provider: Provider;
   frameSnapshot: SerializedNode;
 };
+type LayoutPlanResponse = { plan: LayoutPlan };
 
 async function fetchExperimentsList() {
   try {
@@ -2153,6 +2475,35 @@ async function callEditPage(payload: EditPageRequest): Promise<EditApiResponse> 
   return data;
 }
 
+async function callLayoutPlan(payload: {
+  page: PageDefinition;
+  requirement: RequirementModel;
+  library: ComponentExample[];
+  screenType?: string;
+  backgroundNodeId?: string | null;
+}): Promise<LayoutPlan> {
+  const response = await fetch(`${API_BASE}/api/layout-plan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      page: payload.page,
+      requirement: payload.requirement,
+      library: payload.library,
+      screenType: payload.screenType,
+      background: { nodeId: payload.backgroundNodeId }
+    })
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`布局方案获取失败 (${response.status}): ${truncate(raw)}`);
+  }
+  const data = JSON.parse(raw) as LayoutPlanResponse;
+  if (!data?.plan?.screen || !Array.isArray(data?.plan?.regions)) {
+    throw new Error('布局方案格式不正确');
+  }
+  return data.plan;
+}
+
 async function handleLoadExperiment(experimentId: string) {
   const id = (experimentId || '').trim();
   if (!id) {
@@ -2185,6 +2536,79 @@ async function handleLoadExperiment(experimentId: string) {
       message: getErrorMessage(error)
     });
   }
+}
+
+async function handleGenerateLayoutPlan(msg: GenerateLayoutPlanMessage) {
+  if (!requirementModel) {
+    figma.ui.postMessage({ type: 'layout-plan-error', message: '请先解析需求或加载场景' });
+    return;
+  }
+  const page = requirementModel.pages.find((p) => p.id === msg.pageId) || requirementModel.pages[0];
+  if (!page) {
+    figma.ui.postMessage({ type: 'layout-plan-error', message: '未找到页面' });
+    return;
+  }
+  try {
+    sendStatus('loading', '生成布局方案中');
+    const plan = await callLayoutPlan({
+      page,
+      requirement: requirementModel,
+      library: componentLibrary,
+      screenType: msg.screenType,
+      backgroundNodeId: msg.backgroundNodeId || lastBackgroundNodeId
+    });
+    lastLayoutPlan = plan;
+    lastLayoutPlanPageId = page.id;
+    lastBackgroundNodeId = msg.backgroundNodeId || lastBackgroundNodeId;
+    figma.ui.postMessage({ type: 'layout-plan', plan });
+    sendStatus('success', '已生成布局方案');
+  } catch (error) {
+    figma.ui.postMessage({ type: 'layout-plan-error', message: getErrorMessage(error) });
+    sendStatus('error', getErrorMessage(error));
+  } finally {
+    sendStatus('idle');
+  }
+}
+
+async function handleApplyLayoutPlan() {
+  if (!lastLayoutPlan || !lastLayoutPlanPageId || !requirementModel) {
+    figma.notify('请先生成布局方案');
+    figma.ui.postMessage({ type: 'layout-plan-error', message: '未找到布局方案' });
+    return;
+  }
+  const page = requirementModel.pages.find((p) => p.id === lastLayoutPlanPageId);
+  if (!page) {
+    figma.notify('布局方案对应的页面不存在');
+    figma.ui.postMessage({ type: 'layout-plan-error', message: '页面不存在' });
+    return;
+  }
+  try {
+    sendStatus('loading', '生成布局到画布');
+    await applyLayoutPlanToCanvas(lastLayoutPlan, page);
+    figma.ui.postMessage({ type: 'layout-plan-applied' });
+    sendStatus('success', '已生成到画布');
+  } catch (error) {
+    figma.notify(`生成失败：${getErrorMessage(error)}`);
+    figma.ui.postMessage({ type: 'layout-plan-error', message: getErrorMessage(error) });
+    sendStatus('error', getErrorMessage(error));
+  } finally {
+    sendStatus('idle');
+  }
+}
+
+async function handleSetBackgroundFromSelection() {
+  const selection = figma.currentPage.selection;
+  const node = selection.find((n) => 'fills' in n);
+  if (!node) {
+    figma.ui.postMessage({ type: 'background-select-error', message: '请选择含填充的节点' });
+    return;
+  }
+  lastBackgroundNodeId = node.id;
+  figma.ui.postMessage({
+    type: 'background-selected',
+    nodeId: node.id,
+    name: node.name || '背景节点'
+  });
 }
 
 async function handleParseDocument(docText: string) {
