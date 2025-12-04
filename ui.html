@@ -143,6 +143,9 @@
         border-color: #7dd3fc;
         background: #e0f2fe;
       }
+      .badge.ghost {
+        background: #fff;
+      }
       .lib-list {
         max-height: 180px;
         overflow: auto;
@@ -218,6 +221,25 @@
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 6px;
+      }
+      .detail-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        margin-top: 6px;
+      }
+      .detail-label {
+        font-size: 11px;
+        color: #4b5563;
+        margin-bottom: 2px;
+      }
+      .readonly-box {
+        border: 1px solid #e5e7eb;
+        border-radius: 4px;
+        padding: 4px 6px;
+        background: #f9fafb;
+        font-size: 11px;
+        color: #374151;
       }
       .exp-list {
         display: grid;
@@ -545,6 +567,36 @@
       let loadedExperimentName = '';
       const DATA_TYPES = ['numeric', 'trend', 'alert', 'state', 'text', 'map', 'list'];
       const SLOT_TYPES = ['label', 'numericValue', 'unit', 'state', 'alert', 'listItem'];
+      const INFO_CATEGORIES = ['status', 'metric', 'trend', 'alert', 'navigation', 'context', 'control', 'composite'];
+      const TASK_STAGES = ['overview', 'monitoring', 'drilldown', 'investigation', 'recovery'];
+      const PRIORITY_AFFINITIES = ['high', 'medium', 'low', 'flexible'];
+      const CRITICALITY_OPTIONS = ['good', 'limited', 'not-suitable'];
+      const VISUAL_FOOTPRINTS = ['small', 'medium', 'large'];
+      const DENSITY_PROFILES = ['sparse', 'normal', 'dense'];
+      const DYNAMIC_BEHAVIORS = ['static', 'frequent-update', 'event-driven'];
+      const LAYOUT_ROLES = ['hero', 'summary', 'sidebar', 'toolbar', 'inline'];
+      const VIEWPORT_ZONES = ['top-left', 'top', 'center', 'bottom', 'any'];
+
+      const updateComponentMeta = (id, payload) => {
+        parent.postMessage({ pluginMessage: { type: 'update-component-meta', id, ...payload } }, '*');
+      };
+
+      const parseListInput = (value) =>
+        Array.from(
+          new Set(
+            (value || '')
+              .split(',')
+              .map((v) => v.trim())
+              .filter(Boolean)
+          )
+        );
+
+      const createBadge = (label, value) => {
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = `${label}:${value || '未设定'}`;
+        return badge;
+      };
 
       const setLoading = (isLoading) => {
         runButton.disabled = isLoading;
@@ -741,6 +793,13 @@
           metaGrid.appendChild(desc);
           metaGrid.appendChild(tags);
 
+          const badgeRow = document.createElement('div');
+          badgeRow.className = 'chip-row';
+          badgeRow.appendChild(createBadge('信息', item.infoCategory || '未设定'));
+          badgeRow.appendChild(createBadge('占用', item.visualFootprint || ''));
+          badgeRow.appendChild(createBadge('密度', item.infoDensityProfile || ''));
+          badgeRow.appendChild(createBadge('布局', item.layoutRole || ''));
+
           const chipRow = document.createElement('div');
           chipRow.className = 'chip-row';
           DATA_TYPES.forEach((dt) => {
@@ -761,6 +820,146 @@
             chipRow.appendChild(chip);
           });
 
+          const detailGrid = document.createElement('div');
+          detailGrid.className = 'detail-grid';
+          const viewportValue = Array.isArray(item.recommendedViewportZone)
+            ? item.recommendedViewportZone[0]
+            : item.recommendedViewportZone;
+
+          const buildSelectField = (label, options, value, handler) => {
+            const wrap = document.createElement('div');
+            const lbl = document.createElement('div');
+            lbl.className = 'detail-label';
+            lbl.textContent = label;
+            const select = document.createElement('select');
+            const empty = document.createElement('option');
+            empty.value = '';
+            empty.textContent = '未设置';
+            select.appendChild(empty);
+            options.forEach((opt) => {
+              const o = document.createElement('option');
+              o.value = opt;
+              o.textContent = opt;
+              select.appendChild(o);
+            });
+            select.value = value || '';
+            select.onchange = () => handler(select.value || null);
+            wrap.appendChild(lbl);
+            wrap.appendChild(select);
+            return wrap;
+          };
+
+          detailGrid.appendChild(
+            buildSelectField('信息类别', INFO_CATEGORIES, item.infoCategory, (val) =>
+              updateComponentMeta(item.id, { infoCategory: val })
+            )
+          );
+          detailGrid.appendChild(
+            buildSelectField('优先级适配', PRIORITY_AFFINITIES, item.priorityAffinity, (val) =>
+              updateComponentMeta(item.id, { priorityAffinity: val })
+            )
+          );
+          detailGrid.appendChild(
+            buildSelectField('视觉占用', VISUAL_FOOTPRINTS, item.visualFootprint, (val) =>
+              updateComponentMeta(item.id, { visualFootprint: val })
+            )
+          );
+          detailGrid.appendChild(
+            buildSelectField('信息密度', DENSITY_PROFILES, item.infoDensityProfile, (val) =>
+              updateComponentMeta(item.id, { infoDensityProfile: val })
+            )
+          );
+          detailGrid.appendChild(
+            buildSelectField('动态行为', DYNAMIC_BEHAVIORS, item.dynamicBehavior, (val) =>
+              updateComponentMeta(item.id, { dynamicBehavior: val })
+            )
+          );
+          detailGrid.appendChild(
+            buildSelectField('关键性支持', CRITICALITY_OPTIONS, item.criticalitySupport, (val) =>
+              updateComponentMeta(item.id, { criticalitySupport: val })
+            )
+          );
+          detailGrid.appendChild(
+            buildSelectField('布局角色', LAYOUT_ROLES, item.layoutRole, (val) =>
+              updateComponentMeta(item.id, { layoutRole: val })
+            )
+          );
+          detailGrid.appendChild(
+            buildSelectField(
+              '推荐视域',
+              VIEWPORT_ZONES,
+              viewportValue,
+              (val) => updateComponentMeta(item.id, { recommendedViewportZone: val })
+            )
+          );
+
+          const maxWrap = document.createElement('div');
+          const maxLabel = document.createElement('div');
+          maxLabel.className = 'detail-label';
+          maxLabel.textContent = '单页推荐最大实例数';
+          const maxInput = document.createElement('input');
+          maxInput.type = 'number';
+          maxInput.min = '0';
+          maxInput.placeholder = '可选';
+          maxInput.value =
+            typeof item.recommendedMaxInstancesPerPage === 'number'
+              ? String(item.recommendedMaxInstancesPerPage)
+              : '';
+          maxInput.onchange = () => {
+            const val = parseInt(maxInput.value, 10);
+            updateComponentMeta(item.id, {
+              recommendedMaxInstancesPerPage: Number.isFinite(val) ? val : null
+            });
+          };
+          maxWrap.appendChild(maxLabel);
+          maxWrap.appendChild(maxInput);
+          detailGrid.appendChild(maxWrap);
+
+          const stageWrap = document.createElement('div');
+          stageWrap.className = 'detail-label';
+          stageWrap.textContent = '任务阶段适配';
+
+          const stageChips = document.createElement('div');
+          stageChips.className = 'chip-row';
+          TASK_STAGES.forEach((stage) => {
+            const chip = document.createElement('div');
+            chip.className = 'chip';
+            chip.textContent = stage;
+            const selected = (item.taskStageAffinity || []).includes(stage);
+            if (selected) chip.classList.add('selected');
+            chip.onclick = () => {
+              const next = new Set(item.taskStageAffinity || []);
+              if (next.has(stage)) next.delete(stage);
+              else next.add(stage);
+              updateComponentMeta(item.id, { taskStageAffinity: Array.from(next) });
+            };
+            stageChips.appendChild(chip);
+          });
+
+          const interactionWrap = document.createElement('div');
+          const interactionLabel = document.createElement('div');
+          interactionLabel.className = 'detail-label';
+          interactionLabel.textContent = '交互支持特征';
+          const interactionInput = document.createElement('input');
+          interactionInput.className = 'meta-input';
+          interactionInput.placeholder = '逗号分隔，如 hover, drilldown';
+          interactionInput.value = (item.interactionSupport || []).join(', ');
+          interactionInput.onchange = () => {
+            updateComponentMeta(item.id, {
+              interactionSupport: parseListInput(interactionInput.value)
+            });
+          };
+          interactionWrap.appendChild(interactionLabel);
+          interactionWrap.appendChild(interactionInput);
+
+          const stats = item.layerStats || {};
+          const statsLabel = document.createElement('div');
+          statsLabel.className = 'detail-label';
+          statsLabel.textContent = '图层结构统计';
+          const statsBox = document.createElement('div');
+          statsBox.className = 'readonly-box';
+          statsBox.textContent = `文本:${stats.textNodeCount ?? 0} | 形状:${stats.shapeNodeCount ?? 0} | 深度:${stats.groupDepth ?? 1} | AutoLayout:${stats.autoLayoutEnabled ? '是' : '否'} | 字号:${stats.dominantFontSize || '-'} | 色数:${stats.colorChannelCount ?? 0}`;
+
           const note = document.createElement('textarea');
           note.className = 'lib-note';
           note.rows = 2;
@@ -775,12 +974,19 @@
 
           wrapper.appendChild(titleRow);
           wrapper.appendChild(meta);
+          wrapper.appendChild(badgeRow);
           wrapper.appendChild(metaGrid);
           const dataTypeLabel = document.createElement('div');
           dataTypeLabel.className = 'summary';
           dataTypeLabel.textContent = '支持的数据类型';
           wrapper.appendChild(dataTypeLabel);
           wrapper.appendChild(chipRow);
+          wrapper.appendChild(detailGrid);
+          wrapper.appendChild(stageWrap);
+          wrapper.appendChild(stageChips);
+          wrapper.appendChild(interactionWrap);
+          wrapper.appendChild(statsLabel);
+          wrapper.appendChild(statsBox);
           wrapper.appendChild(note);
           libraryListEl.appendChild(wrapper);
         });
@@ -1306,7 +1512,8 @@
           row.style.display = 'contents';
 
           const label = document.createElement('div');
-          label.textContent = `${cand.name} (${cand.type}) ${cand.preview ? '· ' + cand.preview : ''}`;
+          const fontInfo = cand.fontSize ? ` · ${cand.fontSize}px` : '';
+          label.textContent = `${cand.name} (${cand.type})${fontInfo}${cand.preview ? ' · ' + cand.preview : ''}`;
 
           const slotType = document.createElement('select');
           const emptyOpt = document.createElement('option');

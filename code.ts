@@ -44,6 +44,32 @@ type InfoBinding = { infoItemId: string; componentId?: string };
 
 type ComponentSlotType = 'label' | 'numericValue' | 'unit' | 'state' | 'alert' | 'listItem';
 type ComponentSlot = { slotName: string; nodeId: string; slotType: ComponentSlotType; dataType?: DataType };
+type InfoCategory =
+  | 'status'
+  | 'metric'
+  | 'trend'
+  | 'alert'
+  | 'navigation'
+  | 'context'
+  | 'control'
+  | 'composite';
+type TaskStageAffinity = 'overview' | 'monitoring' | 'drilldown' | 'investigation' | 'recovery';
+type PriorityAffinity = 'high' | 'medium' | 'low' | 'flexible';
+type CriticalitySupport = 'good' | 'limited' | 'not-suitable';
+type VisualFootprint = 'small' | 'medium' | 'large';
+type InfoDensityProfile = 'sparse' | 'normal' | 'dense';
+type DynamicBehavior = 'static' | 'frequent-update' | 'event-driven';
+type LayoutRole = 'hero' | 'summary' | 'sidebar' | 'toolbar' | 'inline';
+type ViewportZone = 'top-left' | 'top' | 'center' | 'bottom' | 'any';
+type LayerStats = {
+  textNodeCount: number;
+  shapeNodeCount: number;
+  groupDepth: number;
+  autoLayoutEnabled: boolean;
+  dominantFontSize?: number;
+  colorChannelCount?: number;
+};
+type InteractionSupport = string;
 type ExperimentSummary = { id: string; name: string; description?: string };
 type ExperimentDetail = ExperimentSummary & { requirement: RequirementModel; library: ComponentExample[] };
 
@@ -72,6 +98,17 @@ type UpdateComponentMetaMessage = {
   description?: string;
   tags?: string[];
   supportedDataTypes?: DataType[];
+  infoCategory?: InfoCategory | null;
+  taskStageAffinity?: TaskStageAffinity[];
+  priorityAffinity?: PriorityAffinity | null;
+  criticalitySupport?: CriticalitySupport | null;
+  visualFootprint?: VisualFootprint | null;
+  infoDensityProfile?: InfoDensityProfile | null;
+  recommendedMaxInstancesPerPage?: number | null;
+  dynamicBehavior?: DynamicBehavior | null;
+  layoutRole?: LayoutRole | null;
+  recommendedViewportZone?: ViewportZone | null;
+  interactionSupport?: InteractionSupport[];
 };
 type RequestSlotsMessage = { type: 'request-slots'; id: string };
 type SaveSlotsMessage = { type: 'save-slots'; id: string; slots: ComponentSlot[] };
@@ -181,6 +218,18 @@ type ComponentExample = {
   tags?: string[];
   supportedDataTypes?: DataType[];
   slots?: ComponentSlot[];
+  infoCategory?: InfoCategory | null;
+  taskStageAffinity?: TaskStageAffinity[];
+  priorityAffinity?: PriorityAffinity | null;
+  criticalitySupport?: CriticalitySupport | null;
+  visualFootprint?: VisualFootprint | null;
+  infoDensityProfile?: InfoDensityProfile | null;
+  recommendedMaxInstancesPerPage?: number | null;
+  dynamicBehavior?: DynamicBehavior | null;
+  layoutRole?: LayoutRole | null;
+  recommendedViewportZone?: ViewportZone | ViewportZone[] | null;
+  interactionSupport?: InteractionSupport[];
+  layerStats?: LayerStats;
   lastUpdated?: number;
 };
 
@@ -217,6 +266,11 @@ const PROVIDERS = {
   siliconflow: { baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen3-30B-A3B-Thinking-2507' },
   gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-1.5-flash-latest' }
 } as const;
+const API_BASE = 'http://localhost:4000';
+const ENRICH_BASE = API_BASE;
+const PARSE_BASE = API_BASE;
+const RECO_BASE = API_BASE;
+const EDIT_BASE = API_BASE;
 
 const DEFAULT_FONT: FontName = { family: 'Inter', style: 'Regular' };
 const FALLBACK_FONT: FontName = { family: 'Roboto', style: 'Regular' };
@@ -232,6 +286,146 @@ let requirementModel: RequirementModel | null = null;
 let lastEditBackup: { frameId: string; backupId: string } | null = null;
 let currentExperimentId: string | null = null;
 type LayoutTemplate = 'two-col' | 'three-col' | 'main-side' | 'dashboard';
+
+const DEFAULT_LAYER_STATS: LayerStats = {
+  textNodeCount: 0,
+  shapeNodeCount: 0,
+  groupDepth: 1,
+  autoLayoutEnabled: false,
+  dominantFontSize: undefined,
+  colorChannelCount: undefined
+};
+
+function defaultLayerStats(): LayerStats {
+  return { ...DEFAULT_LAYER_STATS };
+}
+
+function inferVisualFootprint(width: number, height: number): VisualFootprint {
+  const area = Math.max(0, width || 0) * Math.max(0, height || 0);
+  if (area <= 50000) return 'small';
+  if (area <= 150000) return 'medium';
+  return 'large';
+}
+
+function inferInfoDensityProfile(stats?: LayerStats | null, slotCount = 0): InfoDensityProfile {
+  const s = stats || defaultLayerStats();
+  const score = (s.textNodeCount || 0) + (s.shapeNodeCount || 0) * 0.5 + slotCount;
+  if (score <= 2) return 'sparse';
+  if (score <= 6) return 'normal';
+  return 'dense';
+}
+
+function applyComponentDefaults(comp: ComponentExample): ComponentExample {
+  const stats = comp.layerStats || defaultLayerStats();
+  const slots = comp.slots || [];
+  const viewportZone = Array.isArray(comp.recommendedViewportZone)
+    ? comp.recommendedViewportZone[0]
+    : comp.recommendedViewportZone;
+  return {
+    ...comp,
+    tags: comp.tags || [],
+    supportedDataTypes: comp.supportedDataTypes || [],
+    taskStageAffinity: comp.taskStageAffinity || [],
+    interactionSupport: comp.interactionSupport || [],
+    priorityAffinity: comp.priorityAffinity ?? 'flexible',
+    visualFootprint: comp.visualFootprint ?? inferVisualFootprint(comp.width, comp.height),
+    infoDensityProfile: comp.infoDensityProfile ?? inferInfoDensityProfile(stats, slots.length),
+    recommendedMaxInstancesPerPage:
+      typeof comp.recommendedMaxInstancesPerPage === 'number'
+        ? comp.recommendedMaxInstancesPerPage
+        : null,
+    infoCategory: comp.infoCategory ?? null,
+    criticalitySupport: comp.criticalitySupport ?? null,
+    dynamicBehavior: comp.dynamicBehavior ?? 'static',
+    layoutRole: comp.layoutRole ?? null,
+    recommendedViewportZone: viewportZone ?? 'any',
+    layerStats: stats
+  };
+}
+
+function computeLayerStatsFromNode(node: SceneNode): LayerStats {
+  let textNodeCount = 0;
+  let shapeNodeCount = 0;
+  let groupDepth = 1;
+  let autoLayoutEnabled = false;
+  const fontSizes: number[] = [];
+  const colorSet = new Set<string>();
+
+  const visit = (target: SceneNode, depth: number) => {
+    groupDepth = Math.max(groupDepth, depth);
+    if ('layoutMode' in target && (target as FrameNode).layoutMode !== 'NONE') {
+      autoLayoutEnabled = true;
+    }
+    if ('fills' in target) {
+      const fills = (target as GeometryMixin).fills as Paint[] | typeof figma.mixed | undefined;
+      if (Array.isArray(fills)) {
+        fills.forEach((paint) => {
+          if (paint && paint.type === 'SOLID') {
+            colorSet.add(rgbToHex((paint as SolidPaint).color));
+          }
+        });
+      }
+    }
+
+    if (target.type === 'TEXT') {
+      textNodeCount += 1;
+      const size = (target as TextNode).fontSize;
+      if (typeof size === 'number' && Number.isFinite(size)) fontSizes.push(size);
+    } else if (
+      target.type === 'RECTANGLE' ||
+      target.type === 'ELLIPSE' ||
+      target.type === 'POLYGON' ||
+      target.type === 'STAR' ||
+      target.type === 'VECTOR' ||
+      target.type === 'LINE' ||
+      target.type === 'BOOLEAN_OPERATION'
+    ) {
+      shapeNodeCount += 1;
+    }
+
+    if ('children' in target) {
+      for (const child of (target as ChildrenMixin).children) {
+        visit(child as SceneNode, depth + 1);
+      }
+    }
+  };
+
+  visit(node, 1);
+
+  const dominantFontSize =
+    fontSizes.length > 0 ? Math.round(fontSizes.reduce((a, b) => a + b, 0) / fontSizes.length) : undefined;
+
+  return {
+    textNodeCount,
+    shapeNodeCount,
+    groupDepth,
+    autoLayoutEnabled,
+    dominantFontSize,
+    colorChannelCount: colorSet.size || undefined
+  };
+}
+
+async function hydrateLayerStats() {
+  let updated = false;
+  for (let i = 0; i < componentLibrary.length; i += 1) {
+    const comp = componentLibrary[i];
+    if (!comp.layerStats || comp.layerStats.textNodeCount === 0) {
+      const node = await figma.getNodeByIdAsync(comp.nodeId);
+      if (node && 'children' in node) {
+        const stats = computeLayerStatsFromNode(node as SceneNode);
+        componentLibrary[i] = applyComponentDefaults({ ...comp, layerStats: stats });
+        updated = true;
+      }
+    }
+  }
+  if (updated) {
+    try {
+      await figma.clientStorage.setAsync(LIBRARY_KEY, componentLibrary);
+    } catch (_error) {
+      // ignore storage errors during hydration
+    }
+  }
+}
 
 figma.showUI(__html__, { width: 720, height: 720 });
 
@@ -366,11 +560,12 @@ async function initializeLibrary() {
   try {
     const saved = await figma.clientStorage.getAsync(LIBRARY_KEY);
     if (Array.isArray(saved)) {
-      componentLibrary = saved as ComponentExample[];
+      componentLibrary = (saved as ComponentExample[]).map(applyComponentDefaults);
     }
   } catch (_error) {
     componentLibrary = [];
   }
+  await hydrateLayerStats();
   sendLibraryToUI();
 }
 
@@ -379,6 +574,7 @@ function sendLibraryToUI() {
 }
 
 async function persistLibrary() {
+  componentLibrary = componentLibrary.map(applyComponentDefaults);
   try {
     await figma.clientStorage.setAsync(LIBRARY_KEY, componentLibrary);
   } catch (_error) {
@@ -713,6 +909,24 @@ async function updateComponentMeta(msg: UpdateComponentMetaMessage) {
   if (typeof msg.description === 'string') target.description = msg.description;
   if (Array.isArray(msg.tags)) target.tags = msg.tags;
   if (Array.isArray(msg.supportedDataTypes)) target.supportedDataTypes = msg.supportedDataTypes;
+  if ('infoCategory' in msg) target.infoCategory = msg.infoCategory ?? null;
+  if (Array.isArray(msg.taskStageAffinity)) target.taskStageAffinity = msg.taskStageAffinity;
+  if ('priorityAffinity' in msg) target.priorityAffinity = msg.priorityAffinity ?? null;
+  if ('criticalitySupport' in msg) target.criticalitySupport = msg.criticalitySupport ?? null;
+  if ('visualFootprint' in msg) target.visualFootprint = msg.visualFootprint ?? null;
+  if ('infoDensityProfile' in msg) target.infoDensityProfile = msg.infoDensityProfile ?? null;
+  if ('recommendedMaxInstancesPerPage' in msg) {
+    target.recommendedMaxInstancesPerPage =
+      typeof msg.recommendedMaxInstancesPerPage === 'number'
+        ? msg.recommendedMaxInstancesPerPage
+        : null;
+  }
+  if ('dynamicBehavior' in msg) target.dynamicBehavior = msg.dynamicBehavior ?? null;
+  if ('layoutRole' in msg) target.layoutRole = msg.layoutRole ?? null;
+  if ('recommendedViewportZone' in msg)
+    target.recommendedViewportZone = msg.recommendedViewportZone ?? null;
+  if (Array.isArray(msg.interactionSupport)) target.interactionSupport = msg.interactionSupport;
+  Object.assign(target, applyComponentDefaults(target));
   target.lastUpdated = Date.now();
   await persistLibrary();
 }
@@ -740,9 +954,10 @@ async function persistRequirement(model: RequirementModel) {
 
 function exportLibrary() {
   const payload = {
+    schemaVersion: 2,
     exportedAt: Date.now(),
     count: componentLibrary.length,
-    items: componentLibrary
+    items: componentLibrary.map(applyComponentDefaults)
   };
   figma.ui.postMessage({ type: 'library-export', data: payload });
 }
@@ -753,7 +968,7 @@ function sendRequirementToUI() {
 
 function toComponentExample(frame: FrameNode): ComponentExample {
   const texts = collectTexts(frame);
-  return {
+  const base: ComponentExample = {
     id: frame.id,
     nodeId: frame.id,
     sectionId: frame.parent?.id,
@@ -767,8 +982,10 @@ function toComponentExample(frame: FrameNode): ComponentExample {
     tags: [],
     supportedDataTypes: [],
     slots: [],
+    layerStats: computeLayerStatsFromNode(frame),
     lastUpdated: Date.now()
   };
+  return applyComponentDefaults(base);
 }
 
 async function fetchDesignSpec(
@@ -1521,17 +1738,19 @@ function findComponentIdByName(name: string): string | undefined {
   return target?.id;
 }
 
-type SlotCandidate = { id: string; name: string; type: string; preview?: string };
+type SlotCandidate = { id: string; name: string; type: string; preview?: string; fontSize?: number };
 
 function collectSlotCandidates(root: ChildrenMixin): SlotCandidate[] {
   const items: SlotCandidate[] = [];
   const walk = (node: SceneNode) => {
     if (node.type === 'TEXT') {
+      const textNode = node as TextNode;
       items.push({
         id: node.id,
         name: node.name || 'Text',
         type: 'TEXT',
-        preview: (node as TextNode).characters.slice(0, 20)
+        preview: textNode.characters.slice(0, 20),
+        fontSize: typeof textNode.fontSize === 'number' ? textNode.fontSize : undefined
       });
     }
     if ('children' in node) {
@@ -1552,6 +1771,8 @@ async function buildLibrarySummaries() {
       const node = await figma.getNodeByIdAsync(comp.nodeId);
       const textPreviews =
         node && 'children' in node ? collectSlotCandidates(node as ChildrenMixin) : [];
+      const layerStats =
+        node && 'children' in node ? computeLayerStatsFromNode(node as SceneNode) : comp.layerStats;
       return {
         id: comp.id,
         name: comp.name,
@@ -1563,7 +1784,19 @@ async function buildLibrarySummaries() {
         width: comp.width,
         height: comp.height,
         slots: comp.slots,
-        textPreviews
+        textPreviews,
+        layerStats,
+        infoCategory: comp.infoCategory,
+        taskStageAffinity: comp.taskStageAffinity,
+        priorityAffinity: comp.priorityAffinity,
+        criticalitySupport: comp.criticalitySupport,
+        visualFootprint: comp.visualFootprint,
+        infoDensityProfile: comp.infoDensityProfile,
+        recommendedMaxInstancesPerPage: comp.recommendedMaxInstancesPerPage,
+        dynamicBehavior: comp.dynamicBehavior,
+        layoutRole: comp.layoutRole,
+        recommendedViewportZone: comp.recommendedViewportZone,
+        interactionSupport: comp.interactionSupport
       };
     })
   );
@@ -1578,7 +1811,13 @@ function applyEnrichResult(result: EnrichLibraryResponse): number {
     const rec = map.get(comp.id);
     if (!rec) return comp;
     applied += 1;
-    return {
+    const recViewport = Array.isArray(rec.recommendedViewportZone)
+      ? rec.recommendedViewportZone[0]
+      : rec.recommendedViewportZone;
+    const compViewport = Array.isArray(comp.recommendedViewportZone)
+      ? comp.recommendedViewportZone[0]
+      : comp.recommendedViewportZone;
+    const merged: ComponentExample = {
       ...comp,
       description: rec.description ?? comp.description,
       tags: mergeArrays(comp.tags, rec.tags),
@@ -1586,8 +1825,26 @@ function applyEnrichResult(result: EnrichLibraryResponse): number {
         ? Array.from(new Set(rec.supportedDataTypes))
         : comp.supportedDataTypes,
       slots: rec.slots?.length ? rec.slots : comp.slots,
+      infoCategory: rec.infoCategory ?? comp.infoCategory ?? null,
+      taskStageAffinity: rec.taskStageAffinity ?? comp.taskStageAffinity,
+      priorityAffinity: rec.priorityAffinity ?? comp.priorityAffinity ?? 'flexible',
+      criticalitySupport: rec.criticalitySupport ?? comp.criticalitySupport ?? null,
+      visualFootprint: rec.visualFootprint ?? comp.visualFootprint,
+      infoDensityProfile: rec.infoDensityProfile ?? comp.infoDensityProfile,
+      recommendedMaxInstancesPerPage:
+        typeof rec.recommendedMaxInstancesPerPage === 'number'
+          ? rec.recommendedMaxInstancesPerPage
+          : comp.recommendedMaxInstancesPerPage ?? null,
+      dynamicBehavior: rec.dynamicBehavior ?? comp.dynamicBehavior,
+      layoutRole: rec.layoutRole ?? comp.layoutRole ?? null,
+      recommendedViewportZone: recViewport ?? compViewport,
+      interactionSupport: mergeArrays(
+        comp.interactionSupport as string[] | undefined,
+        rec.interactionSupport as string[] | undefined
+      ),
       lastUpdated: Date.now()
     };
+    return applyComponentDefaults(merged);
   });
   return applied;
 }
@@ -1756,6 +2013,17 @@ type EnrichLibraryResponse = {
     tags?: string[];
     supportedDataTypes?: DataType[];
     slots?: ComponentSlot[];
+    infoCategory?: InfoCategory | null;
+    taskStageAffinity?: TaskStageAffinity[];
+    priorityAffinity?: PriorityAffinity | null;
+    criticalitySupport?: CriticalitySupport | null;
+    visualFootprint?: VisualFootprint | null;
+    infoDensityProfile?: InfoDensityProfile | null;
+    recommendedMaxInstancesPerPage?: number | null;
+    dynamicBehavior?: DynamicBehavior | null;
+    layoutRole?: LayoutRole | null;
+    recommendedViewportZone?: ViewportZone | ViewportZone[] | null;
+    interactionSupport?: InteractionSupport[];
   }[];
 };
 type EditPageRequest = {
@@ -1764,12 +2032,6 @@ type EditPageRequest = {
   provider: Provider;
   frameSnapshot: SerializedNode;
 };
-
-const API_BASE = 'http://localhost:4000';
-const ENRICH_BASE = API_BASE;
-const PARSE_BASE = API_BASE;
-const RECO_BASE = API_BASE;
-const EDIT_BASE = API_BASE;
 
 async function fetchExperimentsList() {
   try {
@@ -1829,6 +2091,18 @@ async function callEnrichLibrary(
     height: number;
     slots?: ComponentSlot[];
     textPreviews?: SlotCandidate[];
+    layerStats?: LayerStats;
+    infoCategory?: InfoCategory | null;
+    taskStageAffinity?: TaskStageAffinity[];
+    priorityAffinity?: PriorityAffinity | null;
+    criticalitySupport?: CriticalitySupport | null;
+    visualFootprint?: VisualFootprint | null;
+    infoDensityProfile?: InfoDensityProfile | null;
+    recommendedMaxInstancesPerPage?: number | null;
+    dynamicBehavior?: DynamicBehavior | null;
+    layoutRole?: LayoutRole | null;
+    recommendedViewportZone?: ViewportZone | ViewportZone[] | null;
+    interactionSupport?: InteractionSupport[];
   }[]
 ): Promise<EnrichLibraryResponse> {
   const response = await fetch(`${ENRICH_BASE}/api/enrich-library`, {
@@ -1893,7 +2167,9 @@ async function handleLoadExperiment(experimentId: string) {
     } as RequirementModel;
     await persistRequirement(nextRequirement);
     sendRequirementToUI();
-    componentLibrary = Array.isArray(detail.library) ? detail.library : [];
+    componentLibrary = Array.isArray(detail.library)
+      ? detail.library.map(applyComponentDefaults)
+      : [];
     await persistLibrary();
     currentExperimentId = detail.id;
     figma.ui.postMessage({
