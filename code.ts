@@ -41,7 +41,7 @@ type RequirementModel = {
   updatedAt: number;
 };
 
-type InfoBinding = { infoItemId: string; componentId?: string };
+type InfoBinding = { infoItemId: string; componentId?: string; slotHints?: Record<string, string> };
 
 type ComponentSlotType = 'label' | 'numericValue' | 'unit' | 'state' | 'alert' | 'listItem';
 type ComponentSlot = { slotName: string; nodeId: string; slotType: ComponentSlotType; dataType?: DataType };
@@ -1579,8 +1579,8 @@ async function applyLayoutPlanToCanvas(plan: LayoutPlan, page: PageDefinition) {
       let col = 0;
       let row = 0;
       regionInfoItems.forEach((item) => {
-        const compNode = getComponentNodeForItem(item, plan, componentMap, regionInfoItems);
-        const clone = cloneComponentWithSlots(compNode, item, plan, componentLibrary);
+        const compNode = getComponentNodeForItem(item, plan, componentMap, regionInfoItems, page);
+        const clone = cloneComponentWithSlots(compNode, item, plan, componentLibrary, page);
         if ('resize' in clone && typeof clone.resize === 'function') {
           try {
             (clone as LayoutMixin).resize(cardWidth, cardHeight);
@@ -1599,8 +1599,8 @@ async function applyLayoutPlanToCanvas(plan: LayoutPlan, page: PageDefinition) {
       });
     } else if (frame.layoutMode !== 'NONE') {
       regionInfoItems.forEach((item) => {
-        const compNode = getComponentNodeForItem(item, plan, componentMap, regionInfoItems);
-        const clone = cloneComponentWithSlots(compNode, item, plan, componentLibrary);
+        const compNode = getComponentNodeForItem(item, plan, componentMap, regionInfoItems, page);
+        const clone = cloneComponentWithSlots(compNode, item, plan, componentLibrary, page);
         if ('layoutAlign' in clone) {
           (clone as LayoutMixin).layoutAlign = 'STRETCH';
         }
@@ -1611,8 +1611,8 @@ async function applyLayoutPlanToCanvas(plan: LayoutPlan, page: PageDefinition) {
       let y = padding;
       const gap = 12;
       regionInfoItems.forEach((item) => {
-        const compNode = getComponentNodeForItem(item, plan, componentMap, regionInfoItems);
-        const clone = cloneComponentWithSlots(compNode, item, plan, componentLibrary);
+        const compNode = getComponentNodeForItem(item, plan, componentMap, regionInfoItems, page);
+        const clone = cloneComponentWithSlots(compNode, item, plan, componentLibrary, page);
         clone.x = padding;
         clone.y = y;
         y += clone.height + gap;
@@ -1632,22 +1632,23 @@ function getComponentNodeForItem(
   item: LayoutRegion['items'][number],
   plan: LayoutPlan,
   componentMap: Map<string, SceneNode>,
-  items: LayoutRegion['items']
+  items: LayoutRegion['items'],
+  page: PageDefinition
 ): SceneNode | null {
   const info = requirementModel?.infoItems.find((i) => i.id === item.infoItemId);
   const dataType = info?.dataType || 'text';
+  const pageBinding = (page.preferredBindings || []).find((b) => b.infoItemId === item.infoItemId);
   const preferred =
     item.componentId ||
+    pageBinding?.componentId ||
     plan.componentDefaults?.[dataType] ||
     plan.componentDefaults?.[info?.dataType || ''] ||
     null;
   if (preferred && componentMap.has(preferred)) return componentMap.get(preferred) as SceneNode;
   const existing = componentLibrary.find((c) => c.id === preferred);
   if (existing) {
-    // try reload
     return null;
   }
-  // fallback: try first component in library
   if (componentLibrary[0]) {
     const node = componentMap.get(componentLibrary[0].id);
     if (node) return node;
@@ -1659,7 +1660,8 @@ function cloneComponentWithSlots(
   source: SceneNode | null,
   item: LayoutRegion['items'][number],
   plan: LayoutPlan,
-  library: ComponentExample[]
+  library: ComponentExample[],
+  page: PageDefinition
 ): FrameNode | SceneNode {
   const info = requirementModel?.infoItems.find((i) => i.id === item.infoItemId);
   const infoName = info?.name || item.infoItemId;
@@ -1691,7 +1693,16 @@ function cloneComponentWithSlots(
 
   const { clone, idMap } = cloneNodeWithMap(source);
   const compMeta = library.find((c) => c.id === (item.componentId || '') || c.nodeId === source.id);
-  applySlotBindings(clone, compMeta, idMap, item.slotBindings || [], infoName, info?.description);
+  const pageBinding = (page.preferredBindings || []).find((b) => b.infoItemId === item.infoItemId);
+  const slotBindings = item.slotBindings?.length
+    ? item.slotBindings
+    : pageBinding?.slotHints
+    ? Object.keys(pageBinding.slotHints).map((slotName) => ({
+        slotName,
+        content: (pageBinding.slotHints as Record<string, string>)[slotName]
+      }))
+    : [];
+  applySlotBindings(clone, compMeta, idMap, slotBindings, infoName, info?.description);
   return clone;
 }
 
@@ -2179,19 +2190,38 @@ function mergeArrays(a?: string[], b?: string[]): string[] | undefined {
 
 function applyRecommendedBindings(result: RecommendComponentsResponse, pageId?: string) {
   if (!requirementModel?.pages) return;
+  const infoMap = new Map<string, InfoItem>();
+  (requirementModel.infoItems || []).forEach((i) => infoMap.set(i.id, i));
   const targetPages = pageId
     ? requirementModel.pages.filter((p) => p.id === pageId)
     : requirementModel.pages;
 
+  const dataTypeComponentMap = new Map<string, string>();
+  targetPages.forEach((page) => {
+    (page.preferredBindings || []).forEach((b) => {
+      if (!b.componentId) return;
+      const info = infoMap.get(b.infoItemId);
+      if (info?.dataType) dataTypeComponentMap.set(info.dataType, b.componentId);
+    });
+  });
+
   targetPages.forEach((page) => {
     const bindings = page.preferredBindings || [];
     result.bindings.forEach((rec) => {
+      const info = infoMap.get(rec.infoItemId);
+      const dataType = info?.dataType;
+      let componentId: string | undefined = rec.componentId;
+      if (!componentId && dataType && dataTypeComponentMap.has(dataType)) {
+        componentId = dataTypeComponentMap.get(dataType);
+      }
       const existing = bindings.find((b) => b.infoItemId === rec.infoItemId);
       if (existing) {
-        existing.componentId = rec.componentId;
+        existing.componentId = componentId;
+        if (rec.slotHints) existing.slotHints = rec.slotHints;
       } else {
-        bindings.push({ infoItemId: rec.infoItemId, componentId: rec.componentId });
+        bindings.push({ infoItemId: rec.infoItemId, componentId, slotHints: rec.slotHints });
       }
+      if (dataType && componentId) dataTypeComponentMap.set(dataType, componentId);
     });
     page.preferredBindings = bindings;
   });

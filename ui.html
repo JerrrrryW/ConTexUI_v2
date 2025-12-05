@@ -452,7 +452,9 @@
               </select>
             </div>
             <button id="generatePages" style="margin-top: 6px">生成所选页面</button>
+            
           </div>
+          
           <div>
             <div class="summary">信息项优先级（选中页面）</div>
             <div id="pageInfo" class="priority-list"></div>
@@ -461,6 +463,46 @@
             </div>
           </div>
         </div>
+        <div class="section" style="margin-top: 8px; border-style: dashed">
+              <h3 style="margin-top: 0">智能布局（组件匹配后）</h3>
+              <div class="summary">基于已选页面与组件库，先生成布局草案，再生成到画布</div>
+              <div class="two-col" style="margin-top: 6px">
+                <div>
+                  <label>布局模式</label>
+                  <select id="layoutMode">
+                    <option value="basic">基础网格</option>
+                    <option value="smart">智能布局</option>
+                  </select>
+                </div>
+                <div>
+                  <label>屏幕类型</label>
+                  <select id="screenType">
+                    <option value="dashboard">通用仪表盘</option>
+                    <option value="factory">工厂总览</option>
+                    <option value="hud">飞行 HUD</option>
+                    <option value="ops">运维监控</option>
+                  </select>
+                </div>
+              </div>
+              <div class="two-col" style="margin-top: 6px">
+                <div>
+                  <label>背景（可选，选中节点作为背景）</label>
+                  <div class="row" style="gap: 6px; align-items: center">
+                    <button id="pickBackgroundBtn" style="width: auto">使用选中节点</button>
+                    <span id="backgroundPreview" class="summary"></span>
+                  </div>
+                </div>
+                <div>
+                  <label>布局操作</label>
+                  <div class="row" style="gap: 6px">
+                    <button id="generatePlanBtn" style="width: auto">生成布局草案</button>
+                    <button id="applyPlanBtn" style="width: auto">生成到画布</button>
+                  </div>
+                  <div id="layoutPlanStatus" class="summary"></div>
+                </div>
+              </div>
+              <div id="layoutPreview" class="preview-box"></div>
+            </div>
         <div class="summary" style="margin-top: 6px">
           <span>高优先级 ≤ 1 项</span>
           <span style="margin-left: 8px">中优先级 ≤ 4 项</span>
@@ -494,45 +536,6 @@
             生成时参考组件库
           </label>
           <button id="run">生成到画布</button>
-        </div>
-        <div class="section" style="margin-top: 8px; border-style: dashed">
-          <h3 style="margin-top: 0">智能布局（大模型）</h3>
-          <div class="two-col">
-            <div>
-              <label>布局模式</label>
-              <select id="layoutMode">
-                <option value="basic">基础网格</option>
-                <option value="smart">智能布局</option>
-              </select>
-            </div>
-            <div>
-              <label>屏幕类型</label>
-              <select id="screenType">
-                <option value="dashboard">通用仪表盘</option>
-                <option value="factory">工厂总览</option>
-                <option value="hud">飞行 HUD</option>
-                <option value="ops">运维监控</option>
-              </select>
-            </div>
-          </div>
-          <div class="two-col" style="margin-top: 6px">
-            <div>
-              <label>背景图（可选）</label>
-              <div class="row" style="gap: 6px; align-items: center">
-                <button id="pickBackgroundBtn" style="width: auto">使用选中节点</button>
-                <span id="backgroundPreview" class="summary"></span>
-              </div>
-            </div>
-            <div>
-              <label>布局操作</label>
-              <div class="row" style="gap: 6px">
-                <button id="generatePlanBtn" style="width: auto">生成布局草案</button>
-                <button id="applyPlanBtn" style="width: auto">生成到画布</button>
-              </div>
-              <div id="layoutPlanStatus" class="summary"></div>
-            </div>
-          </div>
-          <div id="layoutPreview" class="preview-box"></div>
         </div>
       </div>
       <div id="status" class="status"></div>
@@ -604,6 +607,7 @@
       const layoutPreviewEl = document.getElementById('layoutPreview');
       const generatePlanBtn = document.getElementById('generatePlanBtn');
       const applyPlanBtn = document.getElementById('applyPlanBtn');
+      const fallbackPlanBtn = document.getElementById('fallbackPlanBtn');
       const exportWrap = document.getElementById('exportWrap');
       const exportText = document.getElementById('exportText');
       const copyExportBtn = document.getElementById('copyExport');
@@ -653,6 +657,7 @@
       let layoutPlan = null;
       let backgroundNodeId = null;
       if (applyPlanBtn) applyPlanBtn.disabled = true;
+      if (fallbackPlanBtn) fallbackPlanBtn.disabled = false;
 
       const updateComponentMeta = (id, payload) => {
         parent.postMessage({ pluginMessage: { type: 'update-component-meta', id, ...payload } }, '*');
@@ -1169,6 +1174,21 @@
         };
       }
 
+      if (fallbackPlanBtn) {
+        fallbackPlanBtn.onclick = () => {
+          if (!selectedPageIds.size) {
+            layoutPlanStatusEl.textContent = '请选择至少一个页面';
+            return;
+          }
+          const pageIds = Array.from(selectedPageIds);
+          const template = templateSelect.value || 'two-col';
+          parent.postMessage({
+            pluginMessage: { type: 'generate-pages', pageIds, template, useLibrary: true }
+          }, '*');
+          layoutPlanStatusEl.textContent = '智能布局失败，已用基础模板生成…';
+        };
+      }
+
       if (applyPlanBtn) {
         applyPlanBtn.onclick = () => {
           if (layoutModeEl.value !== 'smart') {
@@ -1509,6 +1529,7 @@
         if (msg.type === 'layout-plan-error') {
           layoutPlanStatusEl.textContent = `布局方案失败：${msg.message || ''}`;
           if (applyPlanBtn) applyPlanBtn.disabled = true;
+          if (fallbackPlanBtn) fallbackPlanBtn.disabled = false;
           return;
         }
 

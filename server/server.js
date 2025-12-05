@@ -1857,129 +1857,11 @@ app.post('/api/layout-plan', async (req, res) => {
       return res.status(400).json({ error: 'page_and_requirement_required', message: '缺少页面或需求模型' });
     }
 
-    const screenWidth = 1920;
-    const screenHeight = 1080;
     const infoItems = Array.isArray(requirement?.infoItems) ? requirement.infoItems : [];
     const pages = Array.isArray(requirement?.pages) ? requirement.pages : [];
     const fullPage = pages.find((p) => p.id === page.id) || page;
-    const priorities = Array.isArray(fullPage?.infoPriorities) ? fullPage.infoPriorities.slice() : [];
-
-    const sorted = priorities.slice().sort((a, b) => a.priority - b.priority);
-    const pickComponentForType = (dataType) => {
-      const direct = library.find((c) => Array.isArray(c.supportedDataTypes) && c.supportedDataTypes.includes(dataType));
-      if (direct) return direct.id;
-      const fallback = library.find((c) => Array.isArray(c.supportedDataTypes) && c.supportedDataTypes.length);
-      return fallback ? fallback.id : null;
-    };
-
-    const componentDefaults = {
-      numeric: pickComponentForType('numeric'),
-      trend: pickComponentForType('trend'),
-      alert: pickComponentForType('alert'),
-      state: pickComponentForType('state'),
-      text: pickComponentForType('text')
-    };
-
-    const regions = [
-      {
-        id: 'region-left',
-        name: '左侧指标区',
-        role: 'summary',
-        x: 0,
-        y: 0,
-        width: 0.28,
-        height: 1,
-        layout: 'vertical',
-        columns: 1,
-        items: []
-      },
-      {
-        id: 'region-main',
-        name: '主视图',
-        role: 'hero',
-        x: 0.28,
-        y: 0,
-        width: 0.54,
-        height: 0.72,
-        layout: 'grid',
-        columns: 2,
-        items: []
-      },
-      {
-        id: 'region-right',
-        name: '右侧状态区',
-        role: 'sidebar',
-        x: 0.82,
-        y: 0,
-        width: 0.18,
-        height: 0.72,
-        layout: 'vertical',
-        columns: 1,
-        items: []
-      },
-      {
-        id: 'region-bottom',
-        name: '底部入口区',
-        role: 'toolbar',
-        x: 0.28,
-        y: 0.72,
-        width: 0.72,
-        height: 0.28,
-        layout: 'horizontal',
-        columns: 3,
-        items: []
-      }
-    ];
-
-    const slotTemplates = (info, compId) => {
-      const item = infoItems.find((i) => i.id === info.infoItemId);
-      const label = item?.name || info.infoItemId;
-      const value =
-        item?.dataType === 'numeric' || item?.dataType === 'trend'
-          ? '123.4'
-          : item?.dataType === 'alert'
-          ? '3 条'
-          : item?.dataType === 'state'
-          ? '正常'
-          : item?.description || label;
-      return [
-        { slotName: 'title', content: label },
-        { slotName: 'label', content: label },
-        { slotName: 'value', content: value },
-        { slotName: 'numericValue', content: value },
-        { slotName: 'unit', content: 'unit' }
-      ].filter(Boolean);
-    };
-
-    const assign = (targetRegion, info, componentId) => {
-      targetRegion.items.push({
-        infoItemId: info.infoItemId,
-        componentId: componentId || componentDefaults[info.dataType] || null,
-        slotBindings: slotTemplates(info, componentId)
-      });
-    };
-
-    sorted.forEach((info, idx) => {
-      const item = infoItems.find((i) => i.id === info.infoItemId);
-      const dataType = item?.dataType || 'text';
-      const compId = pickComponentForType(dataType);
-      const region =
-        idx === 0 && regions[1] ? regions[1] : dataType === 'alert' ? regions[2] : regions[0];
-      assign(region || regions[0], info, compId);
-    });
-
-    const plan = {
-      screen: {
-        width: screenWidth,
-        height: screenHeight,
-        background: { required: screenType === 'hud', hint: screenType, nodeId: background.nodeId }
-      },
-      screenType,
-      regions,
-      componentDefaults
-    };
-
-    return res.json({ plan });
+    const result = await buildLayoutPlanWithLLM(fullPage, infoItems, library, screenType, background);
+    return res.json({ plan: result.plan, usedLLM: result.usedLLM, warning: result.warning });
   } catch (error) {
     console.error('[layout-plan] failed', error);
     return res.status(500).json({ error: 'layout_plan_failed', message: '生成布局方案失败' });
@@ -2047,6 +1929,19 @@ Rules:
 - Prefer components whose supportedDataTypes or tags match infoItem dataType/semanticTags.
 - If uncertain, leave componentId empty.
 `;
+
+const LAYOUT_PLAN_SYSTEM_PROMPT = `
+You are a layout strategist for high-density dashboards. Plan a full screen layout using provided info items, their priority, and a component library (with slots).
+Output JSON only.
+Rules:
+- Keep screen size around 1920x1080 unless specified.
+- Define 3-6 regions with semantic roles (hero, summary, sidebar, toolbar, main).
+- Map EACH info item to a region and a componentId from library; prefer consistency per dataType.
+- Use existing bindings/slot hints when provided; otherwise create slotBindings using title/value/unit/label.
+- Layout fields x,y,width,height are ratios (0-1).
+- Regions should not overlap; sums of widths/heights should fit within screen.
+- componentDefaults: per dataType recommended componentId.
+Respond with JSON only.`;
 
 function buildEditOpsSystemPrompt() {
   return `You are a UI diff planner. Given the current frame tree (with node IDs) and a natural language edit request, output JSON only with concrete operations to apply on the canvas.
@@ -2120,6 +2015,196 @@ function buildPrompt(items) {
     '\n'
   )}\nReturn JSON: {"items":[{"id":"","description":"","tags":[],"supportedDataTypes":[],"slots":[{"slotName":"","slotType":"","nodeId":"","dataType":""}],"infoCategory":null,"taskStageAffinity":[],"priorityAffinity":"flexible","criticalitySupport":null,"visualFootprint":null,"infoDensityProfile":null,"layoutRole":null,"recommendedViewportZone":null,"recommendedMaxInstancesPerPage":null,"dynamicBehavior":null,"interactionSupport":[]}]}`
     ;
+}
+
+async function buildLayoutPlanWithLLM(page, infoItems, library, screenType, background) {
+  const stub = buildLayoutPlanHeuristic(page, infoItems, library, screenType, background);
+  if (!OPENAI_API_KEY) {
+    return { plan: stub, usedLLM: false, warning: 'missing api key, fallback to heuristic' };
+  }
+  try {
+    const prompt = buildLayoutPlanPrompt(page, infoItems, library, screenType, background);
+    const completion = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: MODEL,
+        temperature: 0.4,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: LAYOUT_PLAN_SYSTEM_PROMPT },
+          { role: 'user', content: prompt }
+        ]
+      })
+    });
+    const raw = await completion.text();
+    if (!completion.ok) {
+      console.error('[layout-plan] llm error', completion.status, raw.slice(0, 400));
+      return { plan: stub, usedLLM: false, warning: 'llm_failed' };
+    }
+    const data = JSON.parse(raw);
+    const content = data.choices?.[0]?.message?.content;
+    const parsed = parseContent(content);
+    if (parsed?.screen && Array.isArray(parsed?.regions)) {
+      return { plan: parsed, usedLLM: true };
+    }
+    return { plan: stub, usedLLM: false, warning: 'llm_parse_failed' };
+  } catch (error) {
+    console.error('[layout-plan] llm failed', error);
+    return { plan: stub, usedLLM: false, warning: 'llm_exception' };
+  }
+}
+
+function buildLayoutPlanPrompt(page, infoItems, library, screenType, background) {
+  const sorted = (page.infoPriorities || []).slice().sort((a, b) => a.priority - b.priority);
+  const infoText = sorted
+    .map((p, idx) => {
+      const item = infoItems.find((i) => i.id === p.infoItemId) || {};
+      return `${idx + 1}. ${item.name || p.infoItemId} | dataType:${item.dataType} | priority:${p.priority} | desc:${item.description || ''}`;
+    })
+    .join('\n');
+  const libText = library
+    .slice(0, 20)
+    .map(
+      (c) =>
+        `id:${c.id}|name:${c.name}|dataTypes:${(c.supportedDataTypes || []).join(',')}|slots:${(c.slots || []).length}|infoCategory:${c.infoCategory || ''}|layoutRole:${c.layoutRole || ''}`
+    )
+    .join('\n');
+  return `目标屏幕类型:${screenType}
+背景节点:${background?.nodeId || '无'}
+页面名称:${page.name}
+优先级信息项(按序):\n${infoText}
+组件库:\n${libText}
+请输出JSON: {"screen":{"width":1920,"height":1080,"background":{"hint":"","nodeId":""}},"regions":[{"id":"","name":"","role":"","x":0,"y":0,"width":0.5,"height":0.5,"layout":"vertical|horizontal|grid","columns":2,"items":[{"infoItemId":"","componentId":"","slotBindings":[{"slotName":"","content":""}]}]}],"componentDefaults":{"numeric":"","trend":"","alert":"","state":"","text":""}}`;
+}
+
+function buildLayoutPlanHeuristic(page, infoItems, library, screenType, background) {
+  const screenWidth = 1920;
+  const screenHeight = 1080;
+  const priorities = Array.isArray(page?.infoPriorities) ? page.infoPriorities.slice() : [];
+  const bindingMap = new Map();
+  (page?.preferredBindings || []).forEach((b) => {
+    bindingMap.set(b.infoItemId, b);
+  });
+
+  const sorted = priorities.slice().sort((a, b) => a.priority - b.priority);
+  const pickComponentForType = (dataType) => {
+    const direct = library.find((c) => Array.isArray(c.supportedDataTypes) && c.supportedDataTypes.includes(dataType));
+    if (direct) return direct.id;
+    const fallback = library.find((c) => Array.isArray(c.supportedDataTypes) && c.supportedDataTypes.length);
+    return fallback ? fallback.id : null;
+  };
+
+  const componentDefaults = {
+    numeric: pickComponentForType('numeric'),
+    trend: pickComponentForType('trend'),
+    alert: pickComponentForType('alert'),
+    state: pickComponentForType('state'),
+    text: pickComponentForType('text')
+  };
+
+  const regions = [
+    {
+      id: 'region-left',
+      name: '左侧指标区',
+      role: 'summary',
+      x: 0,
+      y: 0,
+      width: 0.28,
+      height: 1,
+      layout: 'vertical',
+      columns: 1,
+      items: []
+    },
+    {
+      id: 'region-main',
+      name: '主视图',
+      role: 'hero',
+      x: 0.28,
+      y: 0,
+      width: 0.54,
+      height: 0.72,
+      layout: 'grid',
+      columns: 2,
+      items: []
+    },
+    {
+      id: 'region-right',
+      name: '右侧状态区',
+      role: 'sidebar',
+      x: 0.82,
+      y: 0,
+      width: 0.18,
+      height: 0.72,
+      layout: 'vertical',
+      columns: 1,
+      items: []
+    },
+    {
+      id: 'region-bottom',
+      name: '底部入口区',
+      role: 'toolbar',
+      x: 0.28,
+      y: 0.72,
+      width: 0.72,
+      height: 0.28,
+      layout: 'horizontal',
+      columns: 3,
+      items: []
+    }
+  ];
+
+  const slotTemplates = (info, compId) => {
+    const item = infoItems.find((i) => i.id === info.infoItemId);
+    const label = item?.name || info.infoItemId;
+    const value =
+      item?.dataType === 'numeric' || item?.dataType === 'trend'
+        ? '123.4'
+        : item?.dataType === 'alert'
+        ? '3 条'
+        : item?.dataType === 'state'
+        ? '正常'
+        : item?.description || label;
+    return [
+      { slotName: 'title', content: label },
+      { slotName: 'label', content: label },
+      { slotName: 'value', content: value },
+      { slotName: 'numericValue', content: value },
+      { slotName: 'unit', content: 'unit' }
+    ].filter(Boolean);
+  };
+
+  const assign = (targetRegion, info, componentId) => {
+    const binding = bindingMap.get(info.infoItemId);
+    const slotHints = binding?.slotHints || null;
+    const slots = slotHints
+      ? Object.keys(slotHints).map((slotName) => ({ slotName, content: slotHints[slotName] }))
+      : slotTemplates(info, componentId);
+    targetRegion.items.push({
+      infoItemId: info.infoItemId,
+      componentId: componentId || binding?.componentId || componentDefaults[info.dataType] || null,
+      slotBindings: slots
+    });
+  };
+
+  sorted.forEach((info, idx) => {
+    const item = infoItems.find((i) => i.id === info.infoItemId);
+    const dataType = item?.dataType || 'text';
+    const compId = pickComponentForType(dataType);
+    const region = idx === 0 && regions[1] ? regions[1] : dataType === 'alert' ? regions[2] : regions[0];
+    assign(region || regions[0], info, compId);
+  });
+
+  return {
+    screen: {
+      width: screenWidth,
+      height: screenHeight,
+      background: { required: screenType === 'hud', hint: screenType, nodeId: background?.nodeId }
+    },
+    screenType,
+    regions,
+    componentDefaults
+  };
 }
 
 function parseContent(content) {
