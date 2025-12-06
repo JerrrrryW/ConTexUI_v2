@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+const fs = require('fs');
+const path = require('path');
 
 dotenv.config();
 
@@ -19,6 +21,51 @@ const RECO_MODEL = process.env.RECO_MODEL || MODEL;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_BASE_URL = process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash-latest';
+
+const LLM_LOG_DIR = path.join(__dirname, 'llm_logs');
+
+function ensureLLMLogDir() {
+  try {
+    fs.mkdirSync(LLM_LOG_DIR, { recursive: true });
+  } catch (error) {
+    console.error('[llm] create log dir failed', error);
+  }
+}
+
+ensureLLMLogDir();
+
+function logLLMInteraction(name, payload) {
+  try {
+    const entry = {
+      timestamp: new Date().toISOString(),
+      request: payload.request,
+      responseRaw:
+        typeof payload.responseRaw === 'string'
+          ? payload.responseRaw
+          : payload.responseRaw !== undefined
+          ? payload.responseRaw
+          : undefined,
+      parsedPreview: payload.parsed ? JSON.stringify(payload.parsed).slice(0, 2000) : undefined,
+      error: payload.error ? String(payload.error) : undefined
+    };
+    const filePath = path.join(LLM_LOG_DIR, `${name}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(entry, null, 2), 'utf8');
+
+    if (entry.request) {
+      console.log(`[llm:${name}] request ->`, JSON.stringify(entry.request, null, 2));
+    }
+    if (entry.responseRaw !== undefined) {
+      const preview =
+        typeof entry.responseRaw === 'string'
+          ? entry.responseRaw.slice(0, 2000)
+          : JSON.stringify(entry.responseRaw, null, 2);
+      console.log(`[llm:${name}] response ->`, preview);
+    }
+    if (entry.error) console.log(`[llm:${name}] error ->`, entry.error);
+  } catch (err) {
+    console.error(`[llm:${name}] log failed`, err);
+  }
+}
 
 // -------- EXPERIMENTS (in-memory) --------
 const experiments = [
@@ -62,11 +109,31 @@ const experiments = [
             { infoItemId: 'info-weather', priority: 5 }
           ],
           preferredBindings: [
-            { infoItemId: 'info-alerts', componentId: 'comp-alert-list' },
-            { infoItemId: 'info-speed', componentId: 'comp-metric-speed' },
-            { infoItemId: 'info-alt', componentId: 'comp-metric-alt' },
-            { infoItemId: 'info-fuel', componentId: 'comp-metric-fuel' },
-            { infoItemId: 'info-weather', componentId: 'comp-weather' }
+            {
+              infoItemId: 'info-alerts',
+              componentId: 'comp-alert-list',
+              slotHints: { item: '系统告警列表' }
+            },
+            {
+              infoItemId: 'info-speed',
+              componentId: 'comp-metric-speed',
+              slotHints: { title: '对地速度', numericValue: '245', unit: 'kts' }
+            },
+            {
+              infoItemId: 'info-alt',
+              componentId: 'comp-metric-alt',
+              slotHints: { title: '高度', numericValue: '12000', unit: 'ft' }
+            },
+            {
+              infoItemId: 'info-fuel',
+              componentId: 'comp-metric-fuel',
+              slotHints: { title: '燃油剩余', numericValue: '65', unit: '%' }
+            },
+            {
+              infoItemId: 'info-weather',
+              componentId: 'comp-weather',
+              slotHints: { title: '前方天气', state: '小雨' }
+            }
           ]
         },
         {
@@ -83,10 +150,26 @@ const experiments = [
             { infoItemId: 'info-fuel', priority: 4 }
           ],
           preferredBindings: [
-            { infoItemId: 'info-alerts', componentId: 'comp-alert-list' },
-            { infoItemId: 'info-alt', componentId: 'comp-metric-alt' },
-            { infoItemId: 'info-speed', componentId: 'comp-metric-speed' },
-            { infoItemId: 'info-fuel', componentId: 'comp-metric-fuel' }
+            {
+              infoItemId: 'info-alerts',
+              componentId: 'comp-alert-list',
+              slotHints: { item: '高优先级告警队列' }
+            },
+            {
+              infoItemId: 'info-alt',
+              componentId: 'comp-metric-alt',
+              slotHints: { title: '高度', numericValue: '10500', unit: 'ft' }
+            },
+            {
+              infoItemId: 'info-speed',
+              componentId: 'comp-metric-speed',
+              slotHints: { title: '速度', numericValue: '210', unit: 'kts' }
+            },
+            {
+              infoItemId: 'info-fuel',
+              componentId: 'comp-metric-fuel',
+              slotHints: { title: '燃油剩余', numericValue: '58', unit: '%' }
+            }
           ]
         }
       ],
@@ -274,7 +357,123 @@ const experiments = [
         ],
         lastUpdated: Date.now()
       }
-    ]
+    ],
+    layoutPlanPageId: 'page-overview',
+    layoutPlan: {
+      screen: { width: 1920, height: 1080, background: { nodeId: null, hint: 'dashboard' } },
+      screenType: 'dashboard',
+      componentDefaults: {
+        numeric: 'comp-metric-speed',
+        alert: 'comp-alert-list',
+        text: 'comp-weather'
+      },
+      regions: [
+        {
+          id: 'hero',
+          name: '主区域',
+          role: 'hero',
+          x: 0.24,
+          y: 0,
+          width: 0.52,
+          height: 0.6,
+          layout: 'grid',
+          columns: 2,
+          items: [
+            {
+              infoItemId: 'info-alerts',
+              componentId: 'comp-alert-list',
+              slotBindings: [{ slotName: 'item', content: '系统告警列表' }]
+            },
+            {
+              infoItemId: 'info-speed',
+              componentId: 'comp-metric-speed',
+              slotBindings: [
+                { slotName: 'title', content: '对地速度' },
+                { slotName: 'numericValue', content: '245' },
+                { slotName: 'unit', content: 'kts' }
+              ]
+            }
+          ]
+        },
+        {
+          id: 'left',
+          name: '指标列',
+          role: 'summary',
+          x: 0,
+          y: 0,
+          width: 0.24,
+          height: 1,
+          layout: 'vertical',
+          items: [
+            {
+              infoItemId: 'info-alt',
+              componentId: 'comp-metric-alt',
+              slotBindings: [
+                { slotName: 'title', content: '高度' },
+                { slotName: 'numericValue', content: '12000' },
+                { slotName: 'unit', content: 'ft' }
+              ]
+            },
+            {
+              infoItemId: 'info-fuel',
+              componentId: 'comp-metric-fuel',
+              slotBindings: [
+                { slotName: 'title', content: '燃油' },
+                { slotName: 'numericValue', content: '65' },
+                { slotName: 'unit', content: '%' }
+              ]
+            }
+          ]
+        },
+        {
+          id: 'right',
+          name: '天气区',
+          role: 'sidebar',
+          x: 0.76,
+          y: 0,
+          width: 0.24,
+          height: 0.6,
+          layout: 'vertical',
+          items: [
+            {
+              infoItemId: 'info-weather',
+              componentId: 'comp-weather',
+              slotBindings: [
+                { slotName: 'title', content: '前方天气' },
+                { slotName: 'state', content: '小雨' }
+              ]
+            }
+          ]
+        },
+        {
+          id: 'bottom',
+          name: '其他信息',
+          role: 'toolbar',
+          x: 0.24,
+          y: 0.6,
+          width: 0.52,
+          height: 0.4,
+          layout: 'grid',
+          columns: 2,
+          items: [
+            {
+              infoItemId: 'info-alerts',
+              componentId: 'comp-alert-list',
+              slotBindings: [{ slotName: 'item', content: '告警概要' }]
+            },
+            {
+              infoItemId: 'info-fuel',
+              componentId: 'comp-metric-fuel',
+              slotBindings: [
+                { slotName: 'title', content: '燃油冗余' },
+                { slotName: 'numericValue', content: '65' },
+                { slotName: 'unit', content: '%' }
+              ]
+            }
+          ]
+        }
+      ]
+    }
   },
   {
     id: 'exp-prod-safety-v1',
@@ -1635,23 +1834,31 @@ app.post('/api/enrich-library', async (req, res) => {
     console.log('[enrich] items:', items.length);
     console.log('[enrich] prompt sample:', prompt.slice(0, 400));
 
-    const completion = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
+    const llmUrl = `${OPENAI_BASE_URL}/chat/completions`;
+    const llmBody = {
+      model: MODEL,
+      temperature: 0.4,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: ENRICH_SYSTEM_PROMPT },
+        { role: 'user', content: prompt }
+      ]
+    };
+
+    const completion = await fetch(llmUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
-      body: JSON.stringify({
-        model: MODEL,
-        temperature: 0.4,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: ENRICH_SYSTEM_PROMPT },
-          { role: 'user', content: prompt }
-        ]
-      })
+      body: JSON.stringify(llmBody)
     });
 
     const raw = await completion.text();
     if (!completion.ok) {
       console.error('LLM enrich error', completion.status, raw.slice(0, 500));
+      logLLMInteraction('enrich-library', {
+        request: { url: llmUrl, body: llmBody },
+        responseRaw: raw,
+        error: `status_${completion.status}`
+      });
       return res.status(completion.status).json({ error: 'LLM error', detail: raw });
     }
     console.log('[enrich] LLM raw:', raw.slice(0, 800));
@@ -1659,6 +1866,11 @@ app.post('/api/enrich-library', async (req, res) => {
     const content = data.choices?.[0]?.message?.content;
     if (!content) return res.status(502).json({ error: 'Empty LLM response' });
     const parsed = parseContent(content);
+    logLLMInteraction('enrich-library', {
+      request: { url: llmUrl, body: llmBody },
+      responseRaw: raw,
+      parsed
+    });
     return res.json({ items: parsed });
   } catch (error) {
     console.error('enrich failed', error);
@@ -1679,23 +1891,31 @@ app.post('/api/parse-doc', async (req, res) => {
     const prompt = buildParsePrompt(docText);
     console.log('[parse-doc] prompt sample:', prompt.slice(0, 500));
 
-    const completion = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
+    const llmUrl = `${OPENAI_BASE_URL}/chat/completions`;
+    const llmBody = {
+      model: PARSE_MODEL,
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: PARSE_SYSTEM_PROMPT },
+        { role: 'user', content: prompt }
+      ]
+    };
+
+    const completion = await fetch(llmUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
-      body: JSON.stringify({
-        model: PARSE_MODEL,
-        temperature: 0.2,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: PARSE_SYSTEM_PROMPT },
-          { role: 'user', content: prompt }
-        ]
-      })
+      body: JSON.stringify(llmBody)
     });
 
     const raw = await completion.text();
     if (!completion.ok) {
       console.error('parse-doc LLM error', completion.status, raw.slice(0, 500));
+      logLLMInteraction('parse-doc', {
+        request: { url: llmUrl, body: llmBody },
+        responseRaw: raw,
+        error: `status_${completion.status}`
+      });
       return res.status(completion.status).json({ error: 'LLM error', detail: raw });
     }
     console.log('[parse-doc] LLM raw:', raw.slice(0, 800));
@@ -1705,8 +1925,18 @@ app.post('/api/parse-doc', async (req, res) => {
     const parsed = parseContent(content);
     if (!parsed?.pages) {
       const fallback = buildFallbackModel(docText);
+      logLLMInteraction('parse-doc', {
+        request: { url: llmUrl, body: llmBody },
+        responseRaw: raw,
+        parsed: fallback
+      });
       return res.json(fallback);
     }
+    logLLMInteraction('parse-doc', {
+      request: { url: llmUrl, body: llmBody },
+      responseRaw: raw,
+      parsed
+    });
     return res.json(parsed);
   } catch (error) {
     console.error('parse-doc failed', error);
@@ -1727,23 +1957,30 @@ app.post('/api/recommend-components', async (req, res) => {
   try {
     const prompt = buildRecommendPrompt(infoItems, library);
     console.log('[recommend] infoItems:', infoItems.length, 'library:', library.length);
-    const completion = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
+    const llmUrl = `${OPENAI_BASE_URL}/chat/completions`;
+    const llmBody = {
+      model: RECO_MODEL,
+      temperature: 0.4,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: RECO_SYSTEM_PROMPT },
+        { role: 'user', content: prompt }
+      ]
+    };
+    const completion = await fetch(llmUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
-      body: JSON.stringify({
-        model: RECO_MODEL,
-        temperature: 0.4,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: RECO_SYSTEM_PROMPT },
-          { role: 'user', content: prompt }
-        ]
-      })
+      body: JSON.stringify(llmBody)
     });
 
     const raw = await completion.text();
     if (!completion.ok) {
       console.error('recommend LLM error', completion.status, raw.slice(0, 500));
+      logLLMInteraction('recommend-components', {
+        request: { url: llmUrl, body: llmBody },
+        responseRaw: raw,
+        error: `status_${completion.status}`
+      });
       const fallback = buildRecommendFallback(infoItems, library);
       return res.status(200).json(fallback);
     }
@@ -1752,9 +1989,19 @@ app.post('/api/recommend-components', async (req, res) => {
     const content = data.choices?.[0]?.message?.content;
     if (!content) {
       const fallback = buildRecommendFallback(infoItems, library);
+      logLLMInteraction('recommend-components', {
+        request: { url: llmUrl, body: llmBody },
+        responseRaw: raw,
+        parsed: fallback
+      });
       return res.status(200).json(fallback);
     }
     const parsed = parseContent(content);
+    logLLMInteraction('recommend-components', {
+      request: { url: llmUrl, body: llmBody },
+      responseRaw: raw,
+      parsed
+    });
     return res.json({ bindings: parsed?.bindings || parsed || [] });
   } catch (error) {
     console.error('recommend failed', error);
@@ -1791,18 +2038,24 @@ app.post('/api/edit-page', async (req, res) => {
     if (provider === 'gemini') {
       const geminiModel = req.body?.model || GEMINI_MODEL;
       const url = `${GEMINI_BASE_URL}/models/${encodeURIComponent(geminiModel)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+      const llmBody = {
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.5 }
+      };
       const completion = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.5 }
-        })
+        body: JSON.stringify(llmBody)
       });
       const raw = await completion.text();
       console.log('[edit-page] gemini raw:', raw.slice(0, 800));
       if (!completion.ok) {
+        logLLMInteraction('edit-page-gemini', {
+          request: { url, body: llmBody, provider: 'gemini', model: geminiModel },
+          responseRaw: raw,
+          error: `status_${completion.status}`
+        });
         return res.status(completion.status).json({ error: 'LLM error', detail: raw.slice(0, 800) });
       }
       const data = JSON.parse(raw);
@@ -1813,31 +2066,49 @@ app.post('/api/edit-page', async (req, res) => {
         .join('');
       if (!contentText) return res.status(502).json({ error: 'Empty LLM response' });
       const parsed = parseContent(contentText);
+      logLLMInteraction('edit-page-gemini', {
+        request: { url, body: llmBody, provider: 'gemini', model: geminiModel },
+        responseRaw: raw,
+        parsed
+      });
       return res.json(parsed);
     }
 
-    const completion = await fetch(`${baseUrl}/chat/completions`, {
+    const llmUrl = `${baseUrl}/chat/completions`;
+    const llmBody = {
+      model,
+      temperature: 0.5,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt }
+      ]
+    };
+
+    const completion = await fetch(llmUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model,
-        temperature: 0.5,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: prompt }
-        ]
-      })
+      body: JSON.stringify(llmBody)
     });
     const raw = await completion.text();
     console.log('[edit-page] raw:', raw.slice(0, 800));
     if (!completion.ok) {
+      logLLMInteraction('edit-page-openai', {
+        request: { url: llmUrl, body: llmBody, provider: 'openai', model },
+        responseRaw: raw,
+        error: `status_${completion.status}`
+      });
       return res.status(completion.status).json({ error: 'LLM error', detail: raw.slice(0, 800) });
     }
     const data = JSON.parse(raw);
     const content = data.choices?.[0]?.message?.content;
     if (!content) return res.status(502).json({ error: 'Empty LLM response' });
     const parsed = parseContent(content);
+    logLLMInteraction('edit-page-openai', {
+      request: { url: llmUrl, body: llmBody, provider: 'openai', model },
+      responseRaw: raw,
+      parsed
+    });
     return res.json(parsed);
   } catch (error) {
     console.error('edit-page failed', error);
@@ -2024,30 +2295,48 @@ async function buildLayoutPlanWithLLM(page, infoItems, library, screenType, back
   }
   try {
     const prompt = buildLayoutPlanPrompt(page, infoItems, library, screenType, background);
-    const completion = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
+    const llmUrl = `${OPENAI_BASE_URL}/chat/completions`;
+    const llmBody = {
+      model: MODEL,
+      temperature: 0.4,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: LAYOUT_PLAN_SYSTEM_PROMPT },
+        { role: 'user', content: prompt }
+      ]
+    };
+    const completion = await fetch(llmUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
-      body: JSON.stringify({
-        model: MODEL,
-        temperature: 0.4,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: LAYOUT_PLAN_SYSTEM_PROMPT },
-          { role: 'user', content: prompt }
-        ]
-      })
+      body: JSON.stringify(llmBody)
     });
     const raw = await completion.text();
     if (!completion.ok) {
       console.error('[layout-plan] llm error', completion.status, raw.slice(0, 400));
+      logLLMInteraction('layout-plan', {
+        request: { url: llmUrl, body: llmBody },
+        responseRaw: raw,
+        error: `status_${completion.status}`
+      });
       return { plan: stub, usedLLM: false, warning: 'llm_failed' };
     }
     const data = JSON.parse(raw);
     const content = data.choices?.[0]?.message?.content;
     const parsed = parseContent(content);
     if (parsed?.screen && Array.isArray(parsed?.regions)) {
+      logLLMInteraction('layout-plan', {
+        request: { url: llmUrl, body: llmBody },
+        responseRaw: raw,
+        parsed
+      });
       return { plan: parsed, usedLLM: true };
     }
+    logLLMInteraction('layout-plan', {
+      request: { url: llmUrl, body: llmBody },
+      responseRaw: raw,
+      parsed: parsed || null,
+      error: 'llm_parse_failed'
+    });
     return { plan: stub, usedLLM: false, warning: 'llm_parse_failed' };
   } catch (error) {
     console.error('[layout-plan] llm failed', error);
