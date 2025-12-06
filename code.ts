@@ -474,7 +474,8 @@ async function hydrateLayerStats() {
   }
 }
 
-figma.showUI(__html__, { width: 720, height: 720 });
+// Enlarged UI to accommodate multi-step layout and modal
+figma.showUI(__html__, { width: 960, height: 760 });
 
 initializeLibrary();
 initializeRequirement();

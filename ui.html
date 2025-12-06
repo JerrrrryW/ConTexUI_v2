@@ -4,28 +4,90 @@
     <meta charset="utf-8" />
     <title>LLM Canvas Demo</title>
     <style>
+      :root {
+        --bg: #111318;
+        --panel: #171a21;
+        --panel-strong: #1c1f26;
+        --panel-border: #2a2f36;
+        --text: #e8ecf3;
+        --text-dim: #b7becd;
+        --muted: #7c8391;
+        --accent: #c7ff3a;
+        --accent-weak: #d8ff7a;
+        --stroke: #2f3440;
+        --surface-hover: rgba(255, 255, 255, 0.02);
+        --surface-press: rgba(255, 255, 255, 0.04);
+        --shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+        --radius-sm: 8px;
+        --radius: 12px;
+      }
+      * {
+        box-sizing: border-box;
+      }
       body {
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        margin: 8px;
+        font-family: 'Inter', 'SF Pro Text', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+          sans-serif;
+        margin: 0;
+        padding: 16px;
         font-size: 12px;
+        background: var(--bg);
+        color: var(--text);
       }
       label {
         display: block;
         margin-bottom: 4px;
         font-weight: 600;
+        color: var(--text);
       }
       input,
       select,
       textarea {
         width: 100%;
         box-sizing: border-box;
-        padding: 4px 6px;
+        padding: 6px 8px;
         font-size: 12px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--panel-border);
+        background: var(--panel);
+        color: var(--text);
+      }
+      input:focus,
+      select:focus,
+      textarea:focus {
+        outline: 1px solid var(--accent);
+        box-shadow: 0 0 0 3px rgba(199, 255, 58, 0.1);
+        border-color: var(--accent);
       }
       button {
         margin-top: 8px;
-        width: 100%;
-        padding: 6px 0;
+        padding: 8px 10px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--panel-border);
+        background: var(--panel);
+        color: var(--text);
+        cursor: pointer;
+        transition: all 0.15s ease;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+      }
+      button:hover {
+        background: var(--surface-hover);
+        border-color: var(--stroke);
+      }
+      button:active {
+        background: var(--surface-press);
+        transform: translateY(1px);
+      }
+      button.primary {
+        background: var(--accent);
+        color: #0f1116;
+        border-color: var(--accent-weak);
+        box-shadow: 0 8px 16px rgba(199, 255, 58, 0.25);
+      }
+      button.primary:hover {
+        filter: brightness(1.05);
+      }
+      button.primary:active {
+        filter: brightness(0.97);
       }
       .row {
         display: flex;
@@ -37,10 +99,11 @@
       }
       .lib {
         margin-top: 8px;
-        border: 1px solid #e5e7eb;
-        border-radius: 6px;
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
         padding: 8px;
-        background: #fafafa;
+        background: var(--panel);
+        box-shadow: var(--shadow);
       }
       .lib-header {
         display: flex;
@@ -73,7 +136,11 @@
         width: 100%;
         box-sizing: border-box;
         font-size: 12px;
-        padding: 4px 6px;
+        padding: 6px 8px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--panel-border);
+        background: var(--panel);
+        color: var(--text);
       }
       .chip-row {
         display: flex;
@@ -81,23 +148,24 @@
         flex-wrap: wrap;
       }
       .chip {
-        border: 1px solid #e5e7eb;
+        border: 1px solid var(--panel-border);
         border-radius: 4px;
         padding: 2px 6px;
         font-size: 11px;
-        background: #f3f4f6;
+        background: #1f2330;
         cursor: pointer;
+        color: var(--text);
       }
       .chip.selected {
-        background: #e0f2fe;
-        border-color: #7dd3fc;
+        background: rgba(199, 255, 58, 0.12);
+        border-color: var(--accent);
       }
       .slot-panel {
         margin-top: 8px;
-        border: 1px solid #e5e7eb;
-        border-radius: 6px;
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
         padding: 8px;
-        background: #fff;
+        background: var(--panel);
       }
       .slot-grid {
         display: grid;
@@ -114,21 +182,21 @@
       }
       .slot-summary {
         font-size: 12px;
-        color: #374151;
+        color: var(--text);
         display: flex;
         gap: 8px;
         align-items: center;
       }
       .slot-hint {
         font-size: 11px;
-        color: #6b7280;
+        color: var(--muted);
         margin: 4px 0;
       }
       .slot-filter {
         width: 100%;
         box-sizing: border-box;
         margin: 6px 0;
-        padding: 4px 6px;
+        padding: 6px 8px;
         font-size: 12px;
       }
       .badge {
@@ -136,32 +204,96 @@
         padding: 2px 6px;
         font-size: 11px;
         border-radius: 4px;
-        border: 1px solid #e5e7eb;
-        background: #f3f4f6;
+        border: 1px solid var(--panel-border);
+        background: #1f2330;
+        color: var(--text);
       }
       .badge.accent {
-        border-color: #7dd3fc;
-        background: #e0f2fe;
+        border-color: var(--accent);
+        background: rgba(199, 255, 58, 0.15);
       }
       .badge.ghost {
-        background: #fff;
+        background: var(--panel);
       }
       .lib-list {
-        max-height: 180px;
+        max-height: 220px;
         overflow: auto;
         display: grid;
         gap: 6px;
       }
+      .lib-list.compact {
+        max-height: 500px;
+        grid-template-columns: 1fr;
+      }
+      .lib-tile {
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius-sm);
+        padding: 8px;
+        background: var(--panel);
+        cursor: pointer;
+        transition: all 0.12s ease;
+      }
+      .lib-tile:hover {
+        border-color: var(--stroke);
+        background: var(--surface-hover);
+      }
+      .lib-tile.active {
+        border-color: var(--accent);
+        background: rgba(199, 255, 58, 0.08);
+        box-shadow: var(--shadow);
+      }
+      .lib-tile .title-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .lib-tile .meta-row {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--muted);
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .filter-row {
+        margin: 6px 0;
+      }
       .lib-item {
-        border: 1px solid #e5e7eb;
-        border-radius: 6px;
-        padding: 6px;
-        background: #fff;
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
+        padding: 10px;
+        background: var(--panel-strong);
+        box-shadow: var(--shadow);
       }
       .lib-meta {
         font-size: 11px;
-        color: #6b7280;
+        color: var(--muted);
         margin-top: 2px;
+      }
+      .detail-wrap {
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
+        background: var(--panel-strong);
+        padding: 10px;
+        min-height: 320px;
+      }
+      .detail-section {
+        margin-top: 8px;
+        padding: 8px;
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius-sm);
+        background: #141821;
+      }
+      .detail-section h4 {
+        margin: 0 0 6px 0;
+        font-size: 12px;
+      }
+      .empty {
+        color: var(--muted);
+        text-align: center;
+        padding: 40px 0;
       }
       .lib-note {
         margin-top: 4px;
@@ -174,42 +306,29 @@
       .status {
         margin-top: 6px;
         min-height: 16px;
-        color: #374151;
+        color: var(--text);
       }
       .op-list {
         margin-top: 6px;
-        border: 1px solid #e5e7eb;
-        border-radius: 6px;
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
         padding: 6px;
-        background: #fff;
+        background: var(--panel);
         font-size: 11px;
         max-height: 140px;
         overflow: auto;
       }
       .op-item {
         padding: 2px 0;
-        border-bottom: 1px solid #f3f4f6;
+        border-bottom: 1px solid var(--stroke);
       }
       .op-item:last-child {
         border-bottom: none;
       }
-      .tabs {
+      .tab-shell {
         display: flex;
-        gap: 6px;
-        margin-bottom: 8px;
-      }
-      .tab-btn {
-        border: 1px solid #e5e7eb;
-        background: #f3f4f6;
-        border-radius: 8px;
-        padding: 6px 10px;
-        cursor: pointer;
-        font-size: 12px;
-      }
-      .tab-btn.active {
-        background: #e0f2fe;
-        border-color: #7dd3fc;
-        font-weight: 600;
+        flex-direction: column;
+        gap: 12px;
       }
       .tab-panel {
         display: none;
@@ -217,9 +336,124 @@
       .tab-panel.active {
         display: block;
       }
+      .stepper {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 4px;
+      }
+      .step-btn {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-radius: var(--radius);
+        border: 1px solid var(--panel-border);
+        background: var(--panel-strong);
+        color: var(--text);
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .step-btn .dot {
+        width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        border: 2px solid var(--accent);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        color: var(--accent);
+      }
+      .step-btn.active {
+        border-color: var(--accent);
+        box-shadow: var(--shadow);
+        color: var(--accent);
+      }
+      .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 2fr;
+        gap: 12px;
+      }
+      .card {
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
+        background: var(--panel-strong);
+        padding: 12px;
+        box-shadow: var(--shadow);
+      }
+      .card h3 {
+        margin: 0 0 8px 0;
+        font-size: 14px;
+      }
+      .section-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 8px;
+      }
+      .pill-ghost {
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: var(--surface-hover);
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .floating-exp {
+        position: fixed;
+        left: 16px;
+        bottom: 16px;
+        padding: 10px 14px;
+        border-radius: 999px;
+        border: 1px solid var(--panel-border);
+        background: var(--panel-strong);
+        color: var(--text);
+        box-shadow: var(--shadow);
+        cursor: pointer;
+      }
+      .floating-exp:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .modal {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 20;
+      }
+      .modal.active {
+        display: flex;
+      }
+      .modal-backdrop {
+        position: absolute;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.55);
+      }
+      .modal-card {
+        position: relative;
+        width: 560px;
+        max-height: 80vh;
+        overflow: auto;
+        background: var(--panel-strong);
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
+        padding: 14px;
+        box-shadow: var(--shadow);
+        z-index: 21;
+      }
+      .close-btn {
+        border: none;
+        background: transparent;
+        color: var(--text);
+        font-size: 16px;
+        padding: 0 6px;
+        cursor: pointer;
+      }
       .req-grid {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: 1fr 2fr;
         gap: 6px;
       }
       .detail-grid {
@@ -230,16 +464,16 @@
       }
       .detail-label {
         font-size: 11px;
-        color: #4b5563;
+        color: var(--muted);
         margin-bottom: 2px;
       }
       .readonly-box {
-        border: 1px solid #e5e7eb;
+        border: 1px solid var(--panel-border);
         border-radius: 4px;
         padding: 4px 6px;
-        background: #f9fafb;
+        background: #151821;
         font-size: 11px;
-        color: #374151;
+        color: var(--text);
       }
       .exp-list {
         display: grid;
@@ -249,21 +483,21 @@
       .preview-box {
         position: relative;
         width: 100%;
-        max-width: 360px;
+        max-width: 420px;
         aspect-ratio: 16 / 9;
-        border: 1px dashed #d1d5db;
-        border-radius: 8px;
-        background: #f9fafb;
+        border: 1px dashed var(--stroke);
+        border-radius: var(--radius);
+        background: #131621;
         overflow: hidden;
         margin-top: 8px;
       }
       .preview-region {
         position: absolute;
-        border: 1px solid #94a3b8;
+        border: 1px solid #6b7280;
         background: rgba(148, 163, 184, 0.12);
         border-radius: 6px;
         font-size: 10px;
-        color: #0f172a;
+        color: #e5e7eb;
         padding: 4px;
         box-sizing: border-box;
         overflow: hidden;
@@ -274,10 +508,10 @@
         font-size: 11px;
       }
       .exp-item {
-        border: 1px solid #e5e7eb;
-        border-radius: 6px;
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
         padding: 8px;
-        background: #fff;
+        background: var(--panel);
         display: grid;
         grid-template-columns: 18px 1fr;
         gap: 8px;
@@ -288,63 +522,64 @@
       }
       .exp-desc {
         font-size: 11px;
-        color: #4b5563;
+        color: var(--muted);
         margin-top: 2px;
       }
       .exp-meta {
         font-size: 11px;
-        color: #6b7280;
+        color: var(--muted);
         margin-top: 2px;
       }
       .exp-empty {
-        color: #6b7280;
+        color: var(--muted);
         font-size: 12px;
-        border: 1px dashed #e5e7eb;
-        background: #fafafa;
+        border: 1px dashed var(--panel-border);
+        background: #151821;
         padding: 8px;
-        border-radius: 6px;
+        border-radius: var(--radius);
       }
       .req-list {
-        max-height: 200px;
+        max-height: 220px;
         overflow: auto;
-        border: 1px solid #e5e7eb;
-        border-radius: 6px;
-        background: #fff;
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
+        background: var(--panel);
       }
       .req-item {
         padding: 6px;
-        border-bottom: 1px solid #f3f4f6;
+        border-bottom: 1px solid var(--stroke);
         cursor: pointer;
       }
       .req-item:hover {
-        background: #f9fafb;
+        background: var(--surface-hover);
       }
       .req-item.active {
-        background: #e0f2fe;
+        background: rgba(199, 255, 58, 0.08);
+        border-left: 2px solid var(--accent);
       }
       .pill {
         display: inline-block;
         padding: 2px 6px;
         border-radius: 4px;
         font-size: 11px;
-        background: #f3f4f6;
+        background: #1f2330;
         margin-right: 4px;
       }
       .priority-list {
-        max-height: 200px;
+        max-height: 220px;
         overflow: auto;
-        border: 1px solid #e5e7eb;
-        border-radius: 6px;
-        background: #fff;
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
+        background: var(--panel);
         padding: 6px;
       }
       .priority-row {
         display: grid;
-        grid-template-columns: 48px 80px 1fr 1fr;
+        grid-template-columns: 48px 1fr 2fr 1fr;
         gap: 6px;
         align-items: center;
-        padding: 4px 0;
-        border-bottom: 1px solid #f3f4f6;
+        padding: 6px 0;
+        border-bottom: 1px solid var(--stroke);
       }
       .priority-row:last-child {
         border-bottom: none;
@@ -353,7 +588,7 @@
         width: 100%;
         box-sizing: border-box;
         font-size: 12px;
-        padding: 4px 6px;
+        padding: 6px 8px;
       }
       .export-block {
         margin-top: 6px;
@@ -367,10 +602,11 @@
       }
       .section {
         margin-top: 10px;
-        padding: 8px;
-        border: 1px solid #e5e7eb;
-        border-radius: 6px;
-        background: #fafafa;
+        padding: 10px;
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
+        background: var(--panel-strong);
+        box-shadow: var(--shadow);
       }
       .section h3 {
         margin: 0 0 6px 0;
@@ -378,7 +614,7 @@
       }
       .summary {
         font-size: 11px;
-        color: #6b7280;
+        color: var(--muted);
       }
       .summary span {
         display: inline-block;
@@ -395,197 +631,307 @@
       .status {
         margin-top: 6px;
         min-height: 16px;
-        color: #374151;
+        color: var(--text);
       }
     </style>
   </head>
   <body>
-    <div class="tabs">
-      <button class="tab-btn active" data-tab="generateTab">生成 / 配置</button>
-      <button class="tab-btn" data-tab="experimentTab">实验模式</button>
-      <button class="tab-btn" data-tab="editTab">UI 编辑</button>
-    </div>
+    <div class="tab-shell">
+      <div class="stepper">
+        <button class="step-btn active" data-tab="libraryTab">
+          <span class="dot">1</span><span>导入/管理组件库</span>
+        </button>
+        <button class="step-btn" data-tab="requirementTab">
+          <span class="dot">2</span><span>解析需求与绑定</span>
+        </button>
+        <button class="step-btn" data-tab="layoutTab">
+          <span class="dot">3</span><span>布局与生成</span>
+        </button>
+        <button class="step-btn" data-tab="editTab">
+          <span class="dot">4</span><span>编辑微调</span>
+        </button>
+      </div>
 
-    <div id="generateTab" class="tab-panel active">
-      <div class="section">
-        <h3>组件库</h3>
-        <div class="lib-header">
-          <button id="import">导入选中 Section</button>
-          <div class="right">
-            <button id="enrich">AI 推荐元数据</button>
-            <button id="export">导出 JSON</button>
+      <div id="libraryTab" class="tab-panel active">
+        <div class="grid-2">
+          <div class="card">
+            <div class="section-title">
+              <h3>组件库</h3>
+              <span class="pill-ghost">Step 1</span>
+            </div>
+            <div class="lib-header" style="gap: 6px; flex-wrap: wrap">
+              <button id="import">导入选中 Section</button>
+              <button id="enrich">AI 推荐元数据</button>
+              <button id="export">导出 JSON</button>
+            </div>
+            <div class="filter-row row" style="align-items: center">
+              <input id="librarySearch" type="search" placeholder="搜索名称/标签" style="flex: 1" />
+              <select id="librarySort" style="width: 140px">
+                <option value="updated">最近更新</option>
+                <option value="name">名称 A-Z</option>
+                <option value="size">尺寸（大到小）</option>
+              </select>
+            </div>
+            <div id="library-list" class="lib-list compact"></div>
+            <div id="exportWrap" class="export-block">
+              <div class="row" style="justify-content: space-between; align-items: center">
+                <span class="summary">已生成 JSON，可复制</span>
+                <button id="copyExport">复制</button>
+              </div>
+              <textarea id="exportText" readonly></textarea>
+            </div>
           </div>
-        </div>
-        <div id="library-list" class="lib-list"></div>
-        <div id="exportWrap" class="export-block">
-          <div class="row" style="justify-content: space-between; align-items: center">
-            <span class="summary">已生成 JSON，可复制</span>
-            <button id="copyExport">复制</button>
+          <div class="card">
+            <div class="section-title">
+              <h3>组件详情</h3>
+              <span class="pill-ghost">编辑 / 插槽</span>
+            </div>
+            <div id="libraryDetail" class="detail-wrap">
+              <div class="empty">在左侧选择组件以查看详情</div>
+            </div>
+            <div class="row" style="margin-top: 10px; justify-content: flex-end">
+              <button id="goRequirement" class="primary" style="width: auto">下一步：需求解析</button>
+            </div>
           </div>
-          <textarea id="exportText" readonly></textarea>
         </div>
       </div>
 
-      <div class="section">
-        <h3>需求文档</h3>
-        <textarea id="docText" class="small" placeholder="粘贴需求文档，用于解析阶段/角色/信息项/页面"></textarea>
-        <div class="row" style="margin-top: 6px; align-items: center">
-          <button id="parseDoc">解析文档</button>
-          <div class="summary" id="reqSummary"></div>
+      <div id="requirementTab" class="tab-panel">
+        <div class="grid-2">
+          <div class="card">
+            <div class="section-title">
+              <h3>需求文档</h3>
+              <span class="pill-ghost">Step 2</span>
+            </div>
+            <textarea
+              id="docText"
+              class="small"
+              placeholder="粘贴需求文档，用于解析阶段/角色/信息项/页面"
+            ></textarea>
+            <div class="row" style="margin-top: 6px; align-items: center">
+              <button id="parseDoc" class="primary" style="width: auto">解析文档</button>
+            </div>
+            <div class="detail-section">
+              <h4>解析概览</h4>
+              <div class="summary" id="reqStats"></div>
+            </div>
+            <div class="detail-section">
+              <h4>阶段 / 角色 / 条件 / 信息项</h4>
+              <div class="req-grid">
+                <div>
+                  <div class="summary">阶段</div>
+                  <div id="phaseList" class="req-list"></div>
+                </div>
+                <div>
+                  <div class="summary">角色</div>
+                  <div id="roleList" class="req-list"></div>
+                </div>
+                <div>
+                  <div class="summary">条件</div>
+                  <div id="conditionList" class="req-list"></div>
+                </div>
+                <div>
+                  <div class="summary">信息项</div>
+                  <div id="infoItemList" class="req-list"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="section-title">
+              <h3>解析结果（单页优先级）</h3>
+              <span class="pill-ghost">排序 / 编辑</span>
+            </div>
+            <div class="req-grid">
+              <div>
+                <div class="summary">页面列表（单选）</div>
+                <div id="pageListSingle" class="req-list"></div>
+              </div>
+              <div>
+                <div class="summary">信息项优先级（选中页面）</div>
+                <div id="pageInfoSingle" class="priority-list"></div>
+              </div>
+            </div>
+            <div class="row" style="justify-content: flex-end; margin-top: 6px">
+              <button id="saveRequirement" style="width: auto">保存解析结果</button>
+            </div>
+            <div class="summary" style="margin-top: 6px">
+              <span>高优先级 ≤ 1 项</span>
+              <span style="margin-left: 8px">中优先级 ≤ 4 项</span>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div class="section">
-        <h3>解析结果</h3>
-        <div class="req-grid">
-          <div>
-            <div class="summary">页面列表</div>
-            <div id="pageList" class="req-list"></div>
-            <div class="summary" style="margin-top: 6px">可多选页面</div>
-            <div style="margin-top: 6px">
+      <div id="layoutTab" class="tab-panel">
+        <div class="card">
+          <div class="section-title">
+            <h3>解析结果（只读 / 绑定组件）</h3>
+            <span class="pill-ghost">页面 & 信息项</span>
+          </div>
+          <div class="req-grid">
+            <div>
+              <div class="summary">页面列表（可多选）</div>
+              <div id="pageListBinding" class="req-list"></div>
+            </div>
+            <div>
+              <div class="summary">信息项优先级（只读）</div>
+              <div id="pageInfoBinding" class="priority-list"></div>
+            </div>
+          </div>
+          <div class="row" style="justify-content: flex-end; margin-top: 6px; gap: 6px">
+            <button id="recommendBindings" style="width: auto">AI 推荐组件</button>
+            <button id="saveRequirementBinding" style="width: auto">保存绑定</button>
+          </div>
+        </div>
+        <div class="grid-2" style="margin-top: 10px">
+          <div class="card">
+            <div class="section-title">
+              <h3>布局与草案</h3>
+              <span class="pill-ghost">Step 3</span>
+            </div>
+            <div class="two-col" style="margin-top: 6px">
+              <div>
+                <label>布局模式</label>
+                <select id="layoutMode">
+                  <option value="basic">基础网格</option>
+                  <option value="smart">智能布局</option>
+                </select>
+              </div>
+              <div>
+                <label>屏幕类型</label>
+                <select id="screenType">
+                  <option value="dashboard">通用仪表盘</option>
+                  <option value="factory">工厂总览</option>
+                  <option value="hud">飞行 HUD</option>
+                  <option value="ops">运维监控</option>
+                </select>
+              </div>
+            </div>
+            <div class="two-col" style="margin-top: 6px">
+              <div>
+                <label>背景（选中节点作为背景，选填）</label>
+                <div class="row" style="gap: 6px; align-items: center">
+                  <button id="pickBackgroundBtn" style="width: auto">使用选中节点</button>
+                  <span id="backgroundPreview" class="summary"></span>
+                </div>
+              </div>
+              <div>
+                <label>布局操作</label>
+                <div class="row" style="gap: 6px">
+                  <button id="generatePlanBtn" style="width: auto">生成布局草案</button>
+                  <button id="applyPlanBtn" style="width: auto">生成到画布</button>
+                  <button id="fallbackPlanBtn" style="width: auto">基础模板</button>
+                </div>
+                <div id="layoutPlanStatus" class="summary"></div>
+              </div>
+            </div>
+            <div id="layoutPreview" class="preview-box"></div>
+          </div>
+
+          <div class="card">
+            <div class="section-title">
+              <h3>基础模板生成</h3>
+              <span class="pill-ghost">页面生成</span>
+            </div>
+            <div>
               <label>布局模板</label>
-              <select id="templateSelect" style="width: 100%; padding: 4px 6px; font-size: 12px;">
+              <select id="templateSelect">
                 <option value="two-col">双列</option>
                 <option value="three-col">三列</option>
                 <option value="main-side">主+侧</option>
                 <option value="dashboard">仪表盘</option>
               </select>
+              <button id="generatePages" class="primary" style="margin-top: 8px; width: 100%">生成所选页面</button>
             </div>
-            <button id="generatePages" style="margin-top: 6px">生成所选页面</button>
-            
-          </div>
-          
-          <div>
-            <div class="summary">信息项优先级（选中页面）</div>
-            <div id="pageInfo" class="priority-list"></div>
-            <div class="row" style="justify-content: flex-end; margin-top: 6px">
-              <button id="recommendBindings">AI 推荐组件</button>
-            </div>
-          </div>
-        </div>
-        <div class="section" style="margin-top: 8px; border-style: dashed">
-              <h3 style="margin-top: 0">智能布局（组件匹配后）</h3>
-              <div class="summary">基于已选页面与组件库，先生成布局草案，再生成到画布</div>
-              <div class="two-col" style="margin-top: 6px">
+            <div style="margin-top: 12px">
+              <label>自由生成（LLM）</label>
+              <div class="two-col">
                 <div>
-                  <label>布局模式</label>
-                  <select id="layoutMode">
-                    <option value="basic">基础网格</option>
-                    <option value="smart">智能布局</option>
+                  <label>模型提供商</label>
+                  <select id="provider">
+                    <option value="siliconflow">SiliconFlow（OpenAI兼容）</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="gemini">Gemini</option>
                   </select>
                 </div>
                 <div>
-                  <label>屏幕类型</label>
-                  <select id="screenType">
-                    <option value="dashboard">通用仪表盘</option>
-                    <option value="factory">工厂总览</option>
-                    <option value="hud">飞行 HUD</option>
-                    <option value="ops">运维监控</option>
-                  </select>
+                  <label>指令（自然语言）</label>
+                  <textarea
+                    id="prompt"
+                    rows="3"
+                    placeholder="例如：生成“姿态监控-正常飞行”页面"
+                  ></textarea>
                 </div>
               </div>
-              <div class="two-col" style="margin-top: 6px">
-                <div>
-                  <label>背景（可选，选中节点作为背景）</label>
-                  <div class="row" style="gap: 6px; align-items: center">
-                    <button id="pickBackgroundBtn" style="width: auto">使用选中节点</button>
-                    <span id="backgroundPreview" class="summary"></span>
-                  </div>
-                </div>
-                <div>
-                  <label>布局操作</label>
-                  <div class="row" style="gap: 6px">
-                    <button id="generatePlanBtn" style="width: auto">生成布局草案</button>
-                    <button id="applyPlanBtn" style="width: auto">生成到画布</button>
-                  </div>
-                  <div id="layoutPlanStatus" class="summary"></div>
-                </div>
+              <div class="row" style="align-items: center; margin-top: 8px">
+                <label style="margin: 0; display: flex; align-items: center; gap: 4px">
+                  <input id="useLibrary" type="checkbox" checked />
+                  生成时参考组件库
+                </label>
+                <button id="run" class="primary" style="width: auto">生成到画布</button>
               </div>
-              <div id="layoutPreview" class="preview-box"></div>
+              <div id="status" class="status"></div>
             </div>
-        <div class="summary" style="margin-top: 6px">
-          <span>高优先级 ≤ 1 项</span>
-          <span style="margin-left: 8px">中优先级 ≤ 4 项</span>
+          </div>
         </div>
-        <button id="saveRequirement" style="margin-top: 6px">保存解析结果</button>
       </div>
 
-      <div class="section">
-        <h3>生成设置</h3>
-        <div class="two-col">
-          <div>
-            <label>模型提供商</label>
-            <select id="provider">
-              <option value="siliconflow">SiliconFlow（OpenAI兼容）</option>
-              <option value="openai">OpenAI</option>
-              <option value="gemini">Gemini</option>
-            </select>
+      <div id="editTab" class="tab-panel">
+        <div class="card">
+          <div class="section-title">
+            <h3>UI 编辑（单页面）</h3>
+            <span class="pill-ghost">Step 4</span>
           </div>
-          <div>
-            <label>指令（自然语言）</label>
-            <textarea
-              id="prompt"
-              rows="3"
-              placeholder="例如：生成“姿态监控-正常飞行”页面"
-            ></textarea>
+          <div class="summary">先在画布选中要编辑的 Frame，然后输入自然语言指令</div>
+          <div class="two-col" style="margin-top: 6px">
+            <div>
+              <label>模型提供商</label>
+              <select id="editProvider">
+                <option value="siliconflow">SiliconFlow（OpenAI兼容）</option>
+                <option value="openai">OpenAI</option>
+                <option value="gemini">Gemini</option>
+              </select>
+            </div>
+            <div>
+              <label>API Key（可选）</label>
+              <input id="editApiKey" type="password" placeholder="留空则使用服务端配置" />
+            </div>
           </div>
-        </div>
-        <div class="row" style="align-items: center; margin-top: 8px">
-          <label style="margin: 0; display: flex; align-items: center; gap: 4px">
-            <input id="useLibrary" type="checkbox" checked />
-            生成时参考组件库
-          </label>
-          <button id="run">生成到画布</button>
+          <label style="margin-top: 6px; display: block">编辑指令</label>
+          <textarea
+            id="editPrompt"
+            rows="3"
+            placeholder="例如：把过滤条调整到顶部，并增加一个两列布局的告警摘要卡片"
+          ></textarea>
+          <div class="row" style="margin-top: 8px; justify-content: space-between; align-items: center">
+            <button id="applyEdit" class="primary" style="width: auto">应用到所选页面</button>
+            <button id="undoEdit" style="width: auto">撤销上一次编辑</button>
+          </div>
+          <div id="editStatus" class="status"></div>
+          <div id="editOpsList" class="op-list"></div>
         </div>
       </div>
-      <div id="status" class="status"></div>
     </div>
-
-    <div id="experimentTab" class="tab-panel">
-      <div class="section">
-        <h3>实验模式</h3>
+    <button id="openExperiment" class="floating-exp">实验预设</button>
+    <div id="experimentModal" class="modal">
+      <div class="modal-backdrop"></div>
+      <div class="modal-card">
+        <div class="section-title" style="align-items: center">
+          <h3 style="margin: 0">实验模式</h3>
+          <div class="row" style="gap: 6px; align-items: center">
+            <span class="pill-ghost">预设场景</span>
+            <button id="closeExperiment" class="close-btn">×</button>
+          </div>
+        </div>
         <div class="summary">选择预设场景，一键加载需求模型与组件库</div>
         <div id="experimentList" class="exp-list"></div>
         <div class="row" style="margin-top: 8px; justify-content: space-between; align-items: center">
           <div id="experimentStatus" class="summary"></div>
-          <button id="loadExperimentBtn" style="width: auto">加载场景</button>
+          <button id="loadExperimentBtn" class="primary" style="width: auto">加载场景</button>
         </div>
       </div>
     </div>
-
-    <div id="editTab" class="tab-panel">
-      <div class="section">
-        <h3>UI 编辑（单页面）</h3>
-        <div class="summary">先在画布选中要编辑的 Frame，然后输入自然语言指令</div>
-        <div class="two-col" style="margin-top: 6px">
-          <div>
-            <label>模型提供商</label>
-            <select id="editProvider">
-              <option value="siliconflow">SiliconFlow（OpenAI兼容）</option>
-              <option value="openai">OpenAI</option>
-              <option value="gemini">Gemini</option>
-            </select>
-          </div>
-          <div>
-            <label>API Key（可选）</label>
-            <input id="editApiKey" type="password" placeholder="留空则使用服务端配置" />
-          </div>
-        </div>
-        <label style="margin-top: 6px; display: block">编辑指令</label>
-        <textarea
-          id="editPrompt"
-          rows="3"
-          placeholder="例如：把过滤条调整到顶部，并增加一个两列布局的告警摘要卡片"
-        ></textarea>
-        <div class="row" style="margin-top: 8px; justify-content: space-between; align-items: center">
-          <button id="applyEdit" style="width: auto">应用到所选页面</button>
-          <button id="undoEdit" style="width: auto">撤销上一次编辑</button>
-        </div>
-        <div id="editStatus" class="status"></div>
-        <div id="editOpsList" class="op-list"></div>
-      </div>
-    </div>
-
     <script>
       const runButton = document.getElementById('run');
       const statusEl = document.getElementById('status');
@@ -593,10 +939,17 @@
       const exportBtn = document.getElementById('export');
       const enrichBtn = document.getElementById('enrich');
       const libraryListEl = document.getElementById('library-list');
+      const librarySearchEl = document.getElementById('librarySearch');
+      const librarySortEl = document.getElementById('librarySort');
+      const libraryDetailEl = document.getElementById('libraryDetail');
       const useLibraryEl = document.getElementById('useLibrary');
       const docTextEl = document.getElementById('docText');
       const parseDocBtn = document.getElementById('parseDoc');
-      const reqSummaryEl = document.getElementById('reqSummary');
+      const reqStatsEl = document.getElementById('reqStats');
+      const phaseListEl = document.getElementById('phaseList');
+      const roleListEl = document.getElementById('roleList');
+      const conditionListEl = document.getElementById('conditionList');
+      const infoItemListEl = document.getElementById('infoItemList');
       const providerEl = document.getElementById('provider');
       const promptEl = document.getElementById('prompt');
       const layoutModeEl = document.getElementById('layoutMode');
@@ -611,9 +964,12 @@
       const exportWrap = document.getElementById('exportWrap');
       const exportText = document.getElementById('exportText');
       const copyExportBtn = document.getElementById('copyExport');
-      const pageListEl = document.getElementById('pageList');
-      const pageInfoEl = document.getElementById('pageInfo');
+      const pageListSingleEl = document.getElementById('pageListSingle');
+      const pageInfoSingleEl = document.getElementById('pageInfoSingle');
+      const pageListBindingEl = document.getElementById('pageListBinding');
+      const pageInfoBindingEl = document.getElementById('pageInfoBinding');
       const saveReqBtn = document.getElementById('saveRequirement');
+      const saveReqBindingBtn = document.getElementById('saveRequirementBinding');
       const recommendBtn = document.getElementById('recommendBindings');
       const templateSelect = document.getElementById('templateSelect');
       const generatePagesBtn = document.getElementById('generatePages');
@@ -624,22 +980,28 @@
       const undoEditBtn = document.getElementById('undoEdit');
       const editStatusEl = document.getElementById('editStatus');
       const editOpsList = document.getElementById('editOpsList');
-      const tabButtons = Array.from(document.querySelectorAll('.tab-btn'));
+      const stepButtons = Array.from(document.querySelectorAll('.step-btn'));
       const tabPanels = {
-        generateTab: document.getElementById('generateTab'),
-        experimentTab: document.getElementById('experimentTab'),
+        libraryTab: document.getElementById('libraryTab'),
+        requirementTab: document.getElementById('requirementTab'),
+        layoutTab: document.getElementById('layoutTab'),
         editTab: document.getElementById('editTab')
       };
+      const goRequirementBtn = document.getElementById('goRequirement');
       const experimentListEl = document.getElementById('experimentList');
       const loadExperimentBtn = document.getElementById('loadExperimentBtn');
       const experimentStatusEl = document.getElementById('experimentStatus');
+      const openExperimentBtn = document.getElementById('openExperiment');
+      const closeExperimentBtn = document.getElementById('closeExperiment');
+      const experimentModal = document.getElementById('experimentModal');
       let library = [];
       let requirement = null;
       let experiments = [];
       let slotState = null;
       let slotFilter = '';
-      let selectedPageId = null;
+      let selectedPageIdSingle = null;
       const selectedPageIds = new Set();
+      let selectedBindingPageId = null;
       let selectedExperimentId = null;
       let experimentLoading = false;
       let loadedExperimentName = '';
@@ -656,6 +1018,7 @@
       const VIEWPORT_ZONES = ['top-left', 'top', 'center', 'bottom', 'any'];
       let layoutPlan = null;
       let backgroundNodeId = null;
+      let selectedComponentId = null;
       if (applyPlanBtn) applyPlanBtn.disabled = true;
       if (fallbackPlanBtn) fallbackPlanBtn.disabled = false;
 
@@ -820,7 +1183,7 @@
       };
 
       const switchTab = (tabId) => {
-        tabButtons.forEach((btn) => {
+        stepButtons.forEach((btn) => {
           btn.classList.toggle('active', btn.dataset.tab === tabId);
         });
         Object.entries(tabPanels).forEach(([id, panel]) => {
@@ -828,13 +1191,289 @@
         });
       };
 
-      tabButtons.forEach((btn) => {
+      stepButtons.forEach((btn) => {
         btn.onclick = () => switchTab(btn.dataset.tab);
       });
+      if (goRequirementBtn) {
+        goRequirementBtn.onclick = () => switchTab('requirementTab');
+      }
+      if (librarySearchEl) {
+        librarySearchEl.oninput = () => renderLibrary();
+      }
+      if (librarySortEl) {
+        librarySortEl.onchange = () => renderLibrary();
+      }
+      if (openExperimentBtn && experimentModal) {
+        openExperimentBtn.onclick = () => {
+          experimentModal.classList.add('active');
+        };
+      }
+      if (closeExperimentBtn && experimentModal) {
+        closeExperimentBtn.onclick = () => experimentModal.classList.remove('active');
+      }
+      if (experimentModal) {
+        const backdrop = experimentModal.querySelector('.modal-backdrop');
+        if (backdrop) {
+          backdrop.onclick = () => experimentModal.classList.remove('active');
+        }
+      }
 
       if (editProviderEl && providerEl) {
         editProviderEl.value = providerEl.value;
       }
+
+      const renderLibraryDetail = (item) => {
+        if (!libraryDetailEl) return;
+        libraryDetailEl.innerHTML = '';
+        if (!item) {
+          const empty = document.createElement('div');
+          empty.className = 'empty';
+          empty.textContent = '在左侧选择组件以查看详情';
+          libraryDetailEl.appendChild(empty);
+          return;
+        }
+
+        const header = document.createElement('div');
+        header.className = 'row';
+        header.style.alignItems = 'center';
+        const nameInput = document.createElement('input');
+        nameInput.className = 'meta-input';
+        nameInput.value = item.name || '';
+        nameInput.placeholder = '组件名称';
+        nameInput.onchange = () => updateComponentMeta(item.id, { name: nameInput.value });
+
+        const headerActions = document.createElement('div');
+        headerActions.className = 'row';
+        headerActions.style.justifyContent = 'flex-end';
+        headerActions.style.flex = '0 0 auto';
+        const slotBtn = document.createElement('button');
+        slotBtn.textContent = '配置插槽';
+        slotBtn.onclick = () =>
+          parent.postMessage({ pluginMessage: { type: 'request-slots', id: item.id } }, '*');
+        const removeBtn = document.createElement('button');
+        removeBtn.textContent = '移除';
+        removeBtn.onclick = () =>
+          parent.postMessage({ pluginMessage: { type: 'remove-component', id: item.id } }, '*');
+        headerActions.appendChild(slotBtn);
+        headerActions.appendChild(removeBtn);
+        header.appendChild(nameInput);
+        header.appendChild(headerActions);
+        libraryDetailEl.appendChild(header);
+
+        const meta = document.createElement('div');
+        meta.className = 'lib-meta';
+        meta.textContent = `${Math.round(item.width)}x${Math.round(item.height)}${
+          item.primaryColor ? ` | 主色:${item.primaryColor}` : ''
+        }${item.sampleText ? ` | 文案:${item.sampleText}` : ''}`;
+        libraryDetailEl.appendChild(meta);
+
+        const badgeRow = document.createElement('div');
+        badgeRow.className = 'chip-row';
+        badgeRow.appendChild(createBadge('信息', item.infoCategory || '未设定'));
+        badgeRow.appendChild(createBadge('占用', item.visualFootprint || ''));
+        badgeRow.appendChild(createBadge('密度', item.infoDensityProfile || ''));
+        badgeRow.appendChild(createBadge('布局', item.layoutRole || ''));
+        libraryDetailEl.appendChild(badgeRow);
+
+        const metaGrid = document.createElement('div');
+        metaGrid.className = 'meta-grid';
+        const desc = document.createElement('textarea');
+        desc.placeholder = '描述';
+        desc.value = item.description || '';
+        desc.onchange = () => updateComponentMeta(item.id, { description: desc.value });
+        const tags = document.createElement('input');
+        tags.className = 'tag-input';
+        tags.placeholder = '标签，逗号分隔';
+        tags.value = (item.tags || []).join(', ');
+        tags.onchange = () => {
+          const values = tags.value
+            .split(',')
+            .map((v) => v.trim())
+            .filter(Boolean);
+          updateComponentMeta(item.id, { tags: values });
+        };
+        metaGrid.appendChild(desc);
+        metaGrid.appendChild(tags);
+        libraryDetailEl.appendChild(metaGrid);
+
+        const dataTypeLabel = document.createElement('div');
+        dataTypeLabel.className = 'summary';
+        dataTypeLabel.textContent = '支持的数据类型';
+        const chipRow = document.createElement('div');
+        chipRow.className = 'chip-row';
+        DATA_TYPES.forEach((dt) => {
+          const chip = document.createElement('div');
+          chip.className = 'chip';
+          chip.textContent = dt;
+          const selected = item.supportedDataTypes?.includes(dt);
+          if (selected) chip.classList.add('selected');
+          chip.onclick = () => {
+            const next = new Set(item.supportedDataTypes || []);
+            if (next.has(dt)) next.delete(dt);
+            else next.add(dt);
+            updateComponentMeta(item.id, { supportedDataTypes: Array.from(next) });
+          };
+          chipRow.appendChild(chip);
+        });
+        libraryDetailEl.appendChild(dataTypeLabel);
+        libraryDetailEl.appendChild(chipRow);
+
+        const detailGrid = document.createElement('div');
+        detailGrid.className = 'detail-grid';
+        const viewportValue = Array.isArray(item.recommendedViewportZone)
+          ? item.recommendedViewportZone[0]
+          : item.recommendedViewportZone;
+        const buildSelectField = (label, options, value, handler) => {
+          const wrap = document.createElement('div');
+          const lbl = document.createElement('div');
+          lbl.className = 'detail-label';
+          lbl.textContent = label;
+          const select = document.createElement('select');
+          const empty = document.createElement('option');
+          empty.value = '';
+          empty.textContent = '未设置';
+          select.appendChild(empty);
+          options.forEach((opt) => {
+            const o = document.createElement('option');
+            o.value = opt;
+            o.textContent = opt;
+            select.appendChild(o);
+          });
+          select.value = value || '';
+          select.onchange = () => handler(select.value || null);
+          wrap.appendChild(lbl);
+          wrap.appendChild(select);
+          return wrap;
+        };
+        detailGrid.appendChild(
+          buildSelectField('信息类别', INFO_CATEGORIES, item.infoCategory, (val) =>
+            updateComponentMeta(item.id, { infoCategory: val })
+          )
+        );
+        detailGrid.appendChild(
+          buildSelectField('优先级适配', PRIORITY_AFFINITIES, item.priorityAffinity, (val) =>
+            updateComponentMeta(item.id, { priorityAffinity: val })
+          )
+        );
+        detailGrid.appendChild(
+          buildSelectField('视觉占用', VISUAL_FOOTPRINTS, item.visualFootprint, (val) =>
+            updateComponentMeta(item.id, { visualFootprint: val })
+          )
+        );
+        detailGrid.appendChild(
+          buildSelectField('信息密度', DENSITY_PROFILES, item.infoDensityProfile, (val) =>
+            updateComponentMeta(item.id, { infoDensityProfile: val })
+          )
+        );
+        detailGrid.appendChild(
+          buildSelectField('动态行为', DYNAMIC_BEHAVIORS, item.dynamicBehavior, (val) =>
+            updateComponentMeta(item.id, { dynamicBehavior: val })
+          )
+        );
+        detailGrid.appendChild(
+          buildSelectField('关键性支持', CRITICALITY_OPTIONS, item.criticalitySupport, (val) =>
+            updateComponentMeta(item.id, { criticalitySupport: val })
+          )
+        );
+        detailGrid.appendChild(
+          buildSelectField('布局角色', LAYOUT_ROLES, item.layoutRole, (val) =>
+            updateComponentMeta(item.id, { layoutRole: val })
+          )
+        );
+        detailGrid.appendChild(
+          buildSelectField('推荐视域', VIEWPORT_ZONES, viewportValue, (val) =>
+            updateComponentMeta(item.id, { recommendedViewportZone: val })
+          )
+        );
+        const maxWrap = document.createElement('div');
+        const maxLabel = document.createElement('div');
+        maxLabel.className = 'detail-label';
+        maxLabel.textContent = '单页推荐最大实例数';
+        const maxInput = document.createElement('input');
+        maxInput.type = 'number';
+        maxInput.min = '0';
+        maxInput.placeholder = '可选';
+        maxInput.value =
+          typeof item.recommendedMaxInstancesPerPage === 'number'
+            ? String(item.recommendedMaxInstancesPerPage)
+            : '';
+        maxInput.onchange = () => {
+          const val = parseInt(maxInput.value, 10);
+          updateComponentMeta(item.id, {
+            recommendedMaxInstancesPerPage: Number.isFinite(val) ? val : null
+          });
+        };
+        maxWrap.appendChild(maxLabel);
+        maxWrap.appendChild(maxInput);
+        detailGrid.appendChild(maxWrap);
+        libraryDetailEl.appendChild(detailGrid);
+
+        const stageLabel = document.createElement('div');
+        stageLabel.className = 'detail-label';
+        stageLabel.textContent = '任务阶段适配';
+        const stageChips = document.createElement('div');
+        stageChips.className = 'chip-row';
+        TASK_STAGES.forEach((stage) => {
+          const chip = document.createElement('div');
+          chip.className = 'chip';
+          chip.textContent = stage;
+          const selected = (item.taskStageAffinity || []).includes(stage);
+          if (selected) chip.classList.add('selected');
+          chip.onclick = () => {
+            const next = new Set(item.taskStageAffinity || []);
+            if (next.has(stage)) next.delete(stage);
+            else next.add(stage);
+            updateComponentMeta(item.id, { taskStageAffinity: Array.from(next) });
+          };
+          stageChips.appendChild(chip);
+        });
+        libraryDetailEl.appendChild(stageLabel);
+        libraryDetailEl.appendChild(stageChips);
+
+        const interactionWrap = document.createElement('div');
+        const interactionLabel = document.createElement('div');
+        interactionLabel.className = 'detail-label';
+        interactionLabel.textContent = '交互支持特征';
+        const interactionInput = document.createElement('input');
+        interactionInput.className = 'meta-input';
+        interactionInput.placeholder = '逗号分隔，如 hover, drilldown';
+        interactionInput.value = (item.interactionSupport || []).join(', ');
+        interactionInput.onchange = () => {
+          updateComponentMeta(item.id, {
+            interactionSupport: parseListInput(interactionInput.value)
+          });
+        };
+        interactionWrap.appendChild(interactionLabel);
+        interactionWrap.appendChild(interactionInput);
+        libraryDetailEl.appendChild(interactionWrap);
+
+        const stats = item.layerStats || {};
+        const statsLabel = document.createElement('div');
+        statsLabel.className = 'detail-label';
+        statsLabel.textContent = '图层结构统计';
+        const statsBox = document.createElement('div');
+        statsBox.className = 'readonly-box';
+        statsBox.textContent = `文本:${stats.textNodeCount ?? 0} | 形状:${stats.shapeNodeCount ?? 0} | 深度:${stats.groupDepth ?? 1} | AutoLayout:${stats.autoLayoutEnabled ? '是' : '否'} | 字号:${stats.dominantFontSize || '-'} | 色数:${stats.colorChannelCount ?? 0}`;
+        libraryDetailEl.appendChild(statsLabel);
+        libraryDetailEl.appendChild(statsBox);
+
+        const note = document.createElement('textarea');
+        note.className = 'lib-note';
+        note.rows = 2;
+        note.placeholder = '备注 / 用途说明';
+        note.value = item.note || '';
+        note.onchange = () => {
+          parent.postMessage(
+            { pluginMessage: { type: 'update-note', id: item.id, note: note.value } },
+            '*'
+          );
+        };
+        libraryDetailEl.appendChild(note);
+
+        const slotAnchor = document.createElement('div');
+        slotAnchor.id = 'slotPanelHost';
+        libraryDetailEl.appendChild(slotAnchor);
+      };
 
       const renderLibrary = () => {
         libraryListEl.innerHTML = '';
@@ -842,271 +1481,63 @@
           libraryListEl.textContent = '暂无组件，选中 Section 后点击“导入”';
           useLibraryEl.checked = false;
           useLibraryEl.disabled = true;
+          renderLibraryDetail(null);
           return;
         }
         useLibraryEl.disabled = false;
         if (useLibraryEl.dataset.userToggled !== 'true') {
           useLibraryEl.checked = true;
         }
+        const keyword = (librarySearchEl?.value || '').trim().toLowerCase();
+        const sortBy = librarySortEl?.value || 'updated';
+        const filtered = library
+          .filter((item) => {
+            if (!keyword) return true;
+            const text = `${item.name || ''} ${(item.tags || []).join(' ')}`.toLowerCase();
+            return text.includes(keyword);
+          })
+          .sort((a, b) => {
+            if (sortBy === 'name') return (a.name || '').localeCompare(b.name || '');
+            if (sortBy === 'size') return (b.width * b.height || 0) - (a.width * a.height || 0);
+            return (b.lastUpdated || 0) - (a.lastUpdated || 0);
+          });
+        if (!filtered.length) {
+          libraryListEl.textContent = '未找到匹配组件';
+          renderLibraryDetail(null);
+          return;
+        }
+        if (!selectedComponentId || !filtered.find((it) => it.id === selectedComponentId)) {
+          selectedComponentId = filtered[0].id;
+        }
 
-        library.forEach((item) => {
-          const wrapper = document.createElement('div');
-          wrapper.className = 'lib-item';
+        filtered.forEach((item) => {
+          const tile = document.createElement('div');
+          tile.className = 'lib-tile';
+          if (item.id === selectedComponentId) tile.classList.add('active');
           const titleRow = document.createElement('div');
-          titleRow.style.display = 'flex';
-          titleRow.style.justifyContent = 'space-between';
-          titleRow.style.alignItems = 'center';
-
-          const nameInput = document.createElement('input');
-          nameInput.className = 'meta-input';
-          nameInput.value = item.name || '';
-          nameInput.placeholder = '组件名称';
-          nameInput.onchange = () => updateComponentMeta(item.id, { name: nameInput.value });
-
-          const actions = document.createElement('div');
-          actions.className = 'lib-actions';
-          const slotBtn = document.createElement('button');
-          slotBtn.textContent = '配置插槽';
-          slotBtn.onclick = () => {
-            parent.postMessage({ pluginMessage: { type: 'request-slots', id: item.id } }, '*');
+          titleRow.className = 'title-row';
+          const name = document.createElement('div');
+          name.textContent = item.name || '未命名';
+          const metaRight = document.createElement('div');
+          metaRight.className = 'summary';
+          metaRight.textContent = item.primaryColor ? item.primaryColor : '';
+          titleRow.appendChild(name);
+          titleRow.appendChild(metaRight);
+          const metaRow = document.createElement('div');
+          metaRow.className = 'meta-row';
+          metaRow.textContent = `${Math.round(item.width)}x${Math.round(item.height)} · ${
+            item.infoCategory || '未设定'
+          } · ${item.infoDensityProfile || '密度?'} · 更新时间 ${item.lastUpdated ? new Date(item.lastUpdated).toLocaleDateString() : '--'}`;
+          tile.appendChild(titleRow);
+          tile.appendChild(metaRow);
+          tile.onclick = () => {
+            selectedComponentId = item.id;
+            renderLibrary();
           };
-          const removeBtn = document.createElement('button');
-          removeBtn.textContent = '移除';
-          removeBtn.onclick = () => {
-            parent.postMessage({ pluginMessage: { type: 'remove-component', id: item.id } }, '*');
-          };
-          actions.appendChild(slotBtn);
-          actions.appendChild(removeBtn);
-
-          titleRow.appendChild(nameInput);
-          titleRow.appendChild(actions);
-
-          const meta = document.createElement('div');
-          meta.className = 'lib-meta';
-          meta.textContent = `${Math.round(item.width)}x${Math.round(item.height)}${
-            item.primaryColor ? ` | 主色:${item.primaryColor}` : ''
-          }${item.sampleText ? ` | 文案:${item.sampleText}` : ''}`;
-
-          const metaGrid = document.createElement('div');
-          metaGrid.className = 'meta-grid';
-
-          const desc = document.createElement('textarea');
-          desc.placeholder = '描述';
-          desc.value = item.description || '';
-          desc.onchange = () => updateComponentMeta(item.id, { description: desc.value });
-
-          const tags = document.createElement('input');
-          tags.className = 'tag-input';
-          tags.placeholder = '标签，逗号分隔';
-          tags.value = (item.tags || []).join(', ');
-          tags.onchange = () => {
-            const values = tags.value
-              .split(',')
-              .map((v) => v.trim())
-              .filter(Boolean);
-            updateComponentMeta(item.id, { tags: values });
-          };
-
-          metaGrid.appendChild(desc);
-          metaGrid.appendChild(tags);
-
-          const badgeRow = document.createElement('div');
-          badgeRow.className = 'chip-row';
-          badgeRow.appendChild(createBadge('信息', item.infoCategory || '未设定'));
-          badgeRow.appendChild(createBadge('占用', item.visualFootprint || ''));
-          badgeRow.appendChild(createBadge('密度', item.infoDensityProfile || ''));
-          badgeRow.appendChild(createBadge('布局', item.layoutRole || ''));
-
-          const chipRow = document.createElement('div');
-          chipRow.className = 'chip-row';
-          DATA_TYPES.forEach((dt) => {
-            const chip = document.createElement('div');
-            chip.className = 'chip';
-            chip.textContent = dt;
-            const selected = item.supportedDataTypes?.includes(dt);
-            if (selected) chip.classList.add('selected');
-            chip.onclick = () => {
-              const next = new Set(item.supportedDataTypes || []);
-              if (next.has(dt)) {
-                next.delete(dt);
-              } else {
-                next.add(dt);
-              }
-              updateComponentMeta(item.id, { supportedDataTypes: Array.from(next) });
-            };
-            chipRow.appendChild(chip);
-          });
-
-          const detailGrid = document.createElement('div');
-          detailGrid.className = 'detail-grid';
-          const viewportValue = Array.isArray(item.recommendedViewportZone)
-            ? item.recommendedViewportZone[0]
-            : item.recommendedViewportZone;
-
-          const buildSelectField = (label, options, value, handler) => {
-            const wrap = document.createElement('div');
-            const lbl = document.createElement('div');
-            lbl.className = 'detail-label';
-            lbl.textContent = label;
-            const select = document.createElement('select');
-            const empty = document.createElement('option');
-            empty.value = '';
-            empty.textContent = '未设置';
-            select.appendChild(empty);
-            options.forEach((opt) => {
-              const o = document.createElement('option');
-              o.value = opt;
-              o.textContent = opt;
-              select.appendChild(o);
-            });
-            select.value = value || '';
-            select.onchange = () => handler(select.value || null);
-            wrap.appendChild(lbl);
-            wrap.appendChild(select);
-            return wrap;
-          };
-
-          detailGrid.appendChild(
-            buildSelectField('信息类别', INFO_CATEGORIES, item.infoCategory, (val) =>
-              updateComponentMeta(item.id, { infoCategory: val })
-            )
-          );
-          detailGrid.appendChild(
-            buildSelectField('优先级适配', PRIORITY_AFFINITIES, item.priorityAffinity, (val) =>
-              updateComponentMeta(item.id, { priorityAffinity: val })
-            )
-          );
-          detailGrid.appendChild(
-            buildSelectField('视觉占用', VISUAL_FOOTPRINTS, item.visualFootprint, (val) =>
-              updateComponentMeta(item.id, { visualFootprint: val })
-            )
-          );
-          detailGrid.appendChild(
-            buildSelectField('信息密度', DENSITY_PROFILES, item.infoDensityProfile, (val) =>
-              updateComponentMeta(item.id, { infoDensityProfile: val })
-            )
-          );
-          detailGrid.appendChild(
-            buildSelectField('动态行为', DYNAMIC_BEHAVIORS, item.dynamicBehavior, (val) =>
-              updateComponentMeta(item.id, { dynamicBehavior: val })
-            )
-          );
-          detailGrid.appendChild(
-            buildSelectField('关键性支持', CRITICALITY_OPTIONS, item.criticalitySupport, (val) =>
-              updateComponentMeta(item.id, { criticalitySupport: val })
-            )
-          );
-          detailGrid.appendChild(
-            buildSelectField('布局角色', LAYOUT_ROLES, item.layoutRole, (val) =>
-              updateComponentMeta(item.id, { layoutRole: val })
-            )
-          );
-          detailGrid.appendChild(
-            buildSelectField(
-              '推荐视域',
-              VIEWPORT_ZONES,
-              viewportValue,
-              (val) => updateComponentMeta(item.id, { recommendedViewportZone: val })
-            )
-          );
-
-          const maxWrap = document.createElement('div');
-          const maxLabel = document.createElement('div');
-          maxLabel.className = 'detail-label';
-          maxLabel.textContent = '单页推荐最大实例数';
-          const maxInput = document.createElement('input');
-          maxInput.type = 'number';
-          maxInput.min = '0';
-          maxInput.placeholder = '可选';
-          maxInput.value =
-            typeof item.recommendedMaxInstancesPerPage === 'number'
-              ? String(item.recommendedMaxInstancesPerPage)
-              : '';
-          maxInput.onchange = () => {
-            const val = parseInt(maxInput.value, 10);
-            updateComponentMeta(item.id, {
-              recommendedMaxInstancesPerPage: Number.isFinite(val) ? val : null
-            });
-          };
-          maxWrap.appendChild(maxLabel);
-          maxWrap.appendChild(maxInput);
-          detailGrid.appendChild(maxWrap);
-
-          const stageWrap = document.createElement('div');
-          stageWrap.className = 'detail-label';
-          stageWrap.textContent = '任务阶段适配';
-
-          const stageChips = document.createElement('div');
-          stageChips.className = 'chip-row';
-          TASK_STAGES.forEach((stage) => {
-            const chip = document.createElement('div');
-            chip.className = 'chip';
-            chip.textContent = stage;
-            const selected = (item.taskStageAffinity || []).includes(stage);
-            if (selected) chip.classList.add('selected');
-            chip.onclick = () => {
-              const next = new Set(item.taskStageAffinity || []);
-              if (next.has(stage)) next.delete(stage);
-              else next.add(stage);
-              updateComponentMeta(item.id, { taskStageAffinity: Array.from(next) });
-            };
-            stageChips.appendChild(chip);
-          });
-
-          const interactionWrap = document.createElement('div');
-          const interactionLabel = document.createElement('div');
-          interactionLabel.className = 'detail-label';
-          interactionLabel.textContent = '交互支持特征';
-          const interactionInput = document.createElement('input');
-          interactionInput.className = 'meta-input';
-          interactionInput.placeholder = '逗号分隔，如 hover, drilldown';
-          interactionInput.value = (item.interactionSupport || []).join(', ');
-          interactionInput.onchange = () => {
-            updateComponentMeta(item.id, {
-              interactionSupport: parseListInput(interactionInput.value)
-            });
-          };
-          interactionWrap.appendChild(interactionLabel);
-          interactionWrap.appendChild(interactionInput);
-
-          const stats = item.layerStats || {};
-          const statsLabel = document.createElement('div');
-          statsLabel.className = 'detail-label';
-          statsLabel.textContent = '图层结构统计';
-          const statsBox = document.createElement('div');
-          statsBox.className = 'readonly-box';
-          statsBox.textContent = `文本:${stats.textNodeCount ?? 0} | 形状:${stats.shapeNodeCount ?? 0} | 深度:${stats.groupDepth ?? 1} | AutoLayout:${stats.autoLayoutEnabled ? '是' : '否'} | 字号:${stats.dominantFontSize || '-'} | 色数:${stats.colorChannelCount ?? 0}`;
-
-          const note = document.createElement('textarea');
-          note.className = 'lib-note';
-          note.rows = 2;
-          note.placeholder = '备注 / 用途说明';
-          note.value = item.note || '';
-          note.onchange = () => {
-            parent.postMessage(
-              { pluginMessage: { type: 'update-note', id: item.id, note: note.value } },
-              '*'
-            );
-          };
-
-          wrapper.appendChild(titleRow);
-          wrapper.appendChild(meta);
-          wrapper.appendChild(badgeRow);
-          wrapper.appendChild(metaGrid);
-          const dataTypeLabel = document.createElement('div');
-          dataTypeLabel.className = 'summary';
-          dataTypeLabel.textContent = '支持的数据类型';
-          wrapper.appendChild(dataTypeLabel);
-          wrapper.appendChild(chipRow);
-          wrapper.appendChild(detailGrid);
-          wrapper.appendChild(stageWrap);
-          wrapper.appendChild(stageChips);
-          wrapper.appendChild(interactionWrap);
-          wrapper.appendChild(statsLabel);
-          wrapper.appendChild(statsBox);
-          wrapper.appendChild(note);
-          libraryListEl.appendChild(wrapper);
+          libraryListEl.appendChild(tile);
         });
+        const activeItem = library.find((it) => it.id === selectedComponentId) || null;
+        renderLibraryDetail(activeItem);
       };
 
       runButton.onclick = () => {
@@ -1227,15 +1658,23 @@
         statusEl.textContent = '已保存解析结果';
         statusEl.dataset.state = 'success';
       };
+      if (saveReqBindingBtn) {
+        saveReqBindingBtn.onclick = () => {
+          if (!requirement) return;
+          parent.postMessage({ pluginMessage: { type: 'update-requirement', data: requirement } }, '*');
+          statusEl.textContent = '已保存绑定';
+          statusEl.dataset.state = 'success';
+        };
+      }
 
       recommendBtn.onclick = () => {
-        if (!selectedPageId) {
+        if (!selectedBindingPageId) {
           statusEl.textContent = '请先选择页面';
           statusEl.dataset.state = 'error';
           return;
         }
         statusEl.textContent = '向 AI 请求组件推荐…';
-        parent.postMessage({ pluginMessage: { type: 'recommend-bindings', pageId: selectedPageId } }, '*');
+        parent.postMessage({ pluginMessage: { type: 'recommend-bindings', pageId: selectedBindingPageId } }, '*');
       };
 
       generatePagesBtn.onclick = () => {
@@ -1284,29 +1723,147 @@
 
       const updateRequirementSummary = (keepSelection = true) => {
         if (!requirement) {
-          reqSummaryEl.textContent = '未解析';
+          if (reqStatsEl) reqStatsEl.textContent = '';
           return;
         }
         const { phases = [], roles = [], conditions = [], infoItems = [], pages = [] } = requirement;
-        reqSummaryEl.innerHTML = `
-          <span>阶段:${phases.length}</span>
-          <span>角色:${roles.length}</span>
-          <span>条件:${conditions.length}</span>
-          <span>信息项:${infoItems.length}</span>
-          <span>页面:${pages.length}</span>
-        `;
-        renderPageList(keepSelection);
+        if (reqStatsEl) {
+          reqStatsEl.textContent = `阶段 ${phases.length} · 角色 ${roles.length} · 条件 ${conditions.length} · 信息项 ${infoItems.length} · 页面 ${pages.length}`;
+        }
+        renderMetaLists();
+        renderPageListSingle(keepSelection);
+        renderPageListBinding(keepSelection);
       };
 
-      const renderPageList = (keepSelection = true) => {
-        pageListEl.innerHTML = '';
+      const renderMetaLists = () => {
+        const renderList = (el, items) => {
+          if (!el) return;
+          el.innerHTML = '';
+          if (!items?.length) {
+            el.textContent = '暂无';
+            return;
+          }
+          items.forEach((item) => {
+            const row = document.createElement('div');
+            row.className = 'req-item';
+            row.innerHTML = `<div>${item.name || item.id}</div>`;
+            el.appendChild(row);
+          });
+        };
+        renderList(phaseListEl, requirement?.phases || []);
+        renderList(roleListEl, requirement?.roles || []);
+        renderList(conditionListEl, requirement?.conditions || []);
+        renderList(infoItemListEl, requirement?.infoItems || []);
+      };
+
+      const renderPageListSingle = (keepSelection = true) => {
+        if (!pageListSingleEl) return;
+        pageListSingleEl.innerHTML = '';
         if (!requirement?.pages?.length) {
-          pageListEl.textContent = '暂无解析结果';
-          pageInfoEl.innerHTML = '';
-          selectedPageId = null;
+          pageListSingleEl.textContent = '暂无解析结果';
+          if (pageInfoSingleEl) pageInfoSingleEl.innerHTML = '';
+          selectedPageIdSingle = null;
           return;
         }
-        const prevSelected = keepSelection ? selectedPageId : null;
+        const prevSelected = keepSelection ? selectedPageIdSingle : null;
+        requirement.pages.forEach((page) => {
+          const row = document.createElement('div');
+          row.className = 'req-item';
+          if (selectedPageIdSingle === page.id) row.classList.add('active');
+          const phase = requirement.phases?.find((p) => p.id === page.phaseId);
+          const role = requirement.roles?.find((r) => r.id === page.roleId);
+          const cond = requirement.conditions?.find((c) => c.id === page.conditionId);
+          row.innerHTML = `
+            <div>${page.name || '未命名页面'}</div>
+            <div class="summary">
+              <span class="pill">${phase?.name || 'Phase'}</span>
+              <span class="pill">${role?.name || 'Role'}</span>
+              <span class="pill">${cond?.name || 'Condition'}</span>
+            </div>
+          `;
+          row.onclick = () => {
+            selectedPageIdSingle = page.id;
+            renderPageListSingle();
+            renderPageInfoSingle(page);
+          };
+          pageListSingleEl.appendChild(row);
+        });
+        if (!selectedPageIdSingle && requirement.pages.length) {
+          selectedPageIdSingle = requirement.pages[0].id;
+        }
+        if (selectedPageIdSingle) {
+          const current =
+            requirement.pages.find((p) => p.id === selectedPageIdSingle) || requirement.pages[0];
+          selectedPageIdSingle = current?.id || null;
+          if (selectedPageIdSingle) renderPageInfoSingle(current);
+        }
+      };
+
+      const renderPageInfoSingle = (page) => {
+        if (!pageInfoSingleEl) return;
+        pageInfoSingleEl.innerHTML = '';
+        if (!page?.infoPriorities?.length) {
+          pageInfoSingleEl.textContent = '无信息项';
+          return;
+        }
+        const rows = page.infoPriorities
+          .slice()
+          .sort((a, b) => a.priority - b.priority)
+          .map((item) => {
+            const info = requirement.infoItems?.find((x) => x.id === item.infoItemId);
+            const row = document.createElement('div');
+            row.className = 'priority-row';
+            const tier = getTier(item);
+            const tierSelect = document.createElement('select');
+            ['high', 'medium', 'low'].forEach((t) => {
+              const opt = document.createElement('option');
+              opt.value = t;
+              opt.textContent = t;
+              tierSelect.appendChild(opt);
+            });
+            tierSelect.value = tier;
+            tierSelect.onchange = () => {
+              const nextTier = tierSelect.value;
+              if (!canAssignTier(page, item, nextTier)) {
+                statusEl.textContent = '高优先级 ≤1，中优先级 ≤4，请调整';
+                statusEl.dataset.state = 'error';
+                tierSelect.value = tier;
+                return;
+              }
+              setTier(item, nextTier);
+              renderPageInfoSingle(page);
+              statusEl.textContent = '';
+            };
+            const nameInput = document.createElement('input');
+            nameInput.className = 'small-input';
+            nameInput.value = info?.name || item.infoItemId;
+            nameInput.onchange = () => {
+              if (info) info.name = nameInput.value;
+            };
+            const noteInput = document.createElement('input');
+            noteInput.className = 'small-input';
+            noteInput.placeholder = '备注';
+            noteInput.value = item.note || '';
+            noteInput.onchange = () => {
+              item.note = noteInput.value;
+            };
+            row.appendChild(tierSelect);
+            row.appendChild(nameInput);
+            row.appendChild(noteInput);
+            return row;
+          });
+        rows.forEach((r) => pageInfoSingleEl.appendChild(r));
+      };
+
+      const renderPageListBinding = (keepSelection = true) => {
+        if (!pageListBindingEl) return;
+        pageListBindingEl.innerHTML = '';
+        if (!requirement?.pages?.length) {
+          pageListBindingEl.textContent = '暂无解析结果';
+          if (pageInfoBindingEl) pageInfoBindingEl.innerHTML = '';
+          selectedBindingPageId = null;
+          return;
+        }
         requirement.pages.forEach((page) => {
           const row = document.createElement('div');
           row.className = 'req-item';
@@ -1328,27 +1885,32 @@
             } else {
               selectedPageIds.add(page.id);
             }
-            selectedPageId = page.id;
-            renderPageList();
-            renderPageInfo(page);
+            selectedBindingPageId = page.id;
+            renderPageListBinding();
+            renderPageInfoBinding(page);
           };
-          pageListEl.appendChild(row);
+          pageListBindingEl.appendChild(row);
         });
-        if (!selectedPageId && requirement.pages.length) {
-          selectedPageId = requirement.pages[0].id;
-          selectedPageIds.add(selectedPageId);
+        if (!selectedPageIds.size && requirement.pages.length) {
+          selectedPageIds.add(requirement.pages[0].id);
         }
-        if (selectedPageId) {
-          const current = requirement.pages.find((p) => p.id === selectedPageId) || requirement.pages[0];
-          selectedPageId = current?.id || null;
-          if (selectedPageId) renderPageInfo(current);
+        if (!selectedBindingPageId && selectedPageIds.size) {
+          selectedBindingPageId = Array.from(selectedPageIds)[0];
+        }
+        if (selectedBindingPageId) {
+          const current =
+            requirement.pages.find((p) => p.id === selectedBindingPageId) ||
+            requirement.pages[0];
+          selectedBindingPageId = current?.id || null;
+          if (selectedBindingPageId) renderPageInfoBinding(current);
         }
       };
 
-      const renderPageInfo = (page) => {
-        pageInfoEl.innerHTML = '';
+      const renderPageInfoBinding = (page) => {
+        if (!pageInfoBindingEl) return;
+        pageInfoBindingEl.innerHTML = '';
         if (!page?.infoPriorities?.length) {
-          pageInfoEl.textContent = '无信息项';
+          pageInfoBindingEl.textContent = '无信息项';
           return;
         }
         const rows = page.infoPriorities
@@ -1358,45 +1920,23 @@
             const info = requirement.infoItems?.find((x) => x.id === item.infoItemId);
             const row = document.createElement('div');
             row.className = 'priority-row';
-
             const tier = getTier(item);
-
-            const tierSelect = document.createElement('select');
-            ['high', 'medium', 'low'].forEach((t) => {
-              const opt = document.createElement('option');
-              opt.value = t;
-              opt.textContent = t;
-              tierSelect.appendChild(opt);
-            });
-            tierSelect.value = tier;
-
-            tierSelect.onchange = () => {
-              const nextTier = tierSelect.value;
-              if (!canAssignTier(page, item, nextTier)) {
-                statusEl.textContent = '高优先级 ≤1，中优先级 ≤4，请调整';
-                statusEl.dataset.state = 'error';
-                tierSelect.value = tier;
-                return;
-              }
-              setTier(item, nextTier);
-              renderPageInfo(page);
-              statusEl.textContent = '';
-            };
-
-            const nameInput = document.createElement('input');
-            nameInput.className = 'small-input';
-            nameInput.value = info?.name || item.infoItemId;
-            nameInput.onchange = () => {
-              if (info) info.name = nameInput.value;
-            };
-
-            const noteInput = document.createElement('input');
-            noteInput.className = 'small-input';
-            noteInput.placeholder = '备注';
-            noteInput.value = item.note || '';
-            noteInput.onchange = () => {
-              item.note = noteInput.value;
-            };
+            const tierBadge = document.createElement('span');
+            tierBadge.className = 'pill';
+            tierBadge.textContent = tier === 'high' ? '高' : tier === 'medium' ? '中' : '低';
+            const nameLabel = document.createElement('div');
+            nameLabel.className = 'small-input';
+            nameLabel.style.border = 'none';
+            nameLabel.style.background = 'transparent';
+            nameLabel.style.padding = '0';
+            nameLabel.textContent = info?.name || item.infoItemId;
+            const noteLabel = document.createElement('div');
+            noteLabel.className = 'small-input';
+            noteLabel.style.border = 'none';
+            noteLabel.style.background = 'transparent';
+            noteLabel.style.padding = '0';
+            noteLabel.style.color = '#9ca3af';
+            noteLabel.textContent = item.note || '';
 
             const bindingSelect = document.createElement('select');
             const noneOpt = document.createElement('option');
@@ -1417,13 +1957,13 @@
               setBinding(page, item.infoItemId, bindingSelect.value);
             };
 
-            row.appendChild(tierSelect);
-            row.appendChild(nameInput);
-            row.appendChild(noteInput);
+            row.appendChild(tierBadge);
+            row.appendChild(nameLabel);
+            row.appendChild(noteLabel);
             row.appendChild(bindingSelect);
             return row;
           });
-        rows.forEach((r) => pageInfoEl.appendChild(r));
+        rows.forEach((r) => pageInfoBindingEl.appendChild(r));
       };
 
       copyExportBtn.onclick = () => {
@@ -1663,11 +2203,14 @@
           if (panel) panel.remove();
           return;
         }
+        const host = document.getElementById('slotPanelHost') || libraryDetailEl || libraryListEl?.parentNode;
         if (!panel) {
           panel = document.createElement('div');
           panel.id = panelId;
           panel.className = 'slot-panel';
-          libraryListEl.parentNode.appendChild(panel);
+          host?.appendChild(panel);
+        } else if (host && panel.parentNode !== host) {
+          host.appendChild(panel);
         }
         panel.innerHTML = '';
 
