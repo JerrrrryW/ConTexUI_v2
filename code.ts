@@ -99,7 +99,12 @@ type LayoutPlan = {
   componentDefaults?: Record<string, string | null | undefined>;
 };
 type ExperimentSummary = { id: string; name: string; description?: string };
-type ExperimentDetail = ExperimentSummary & { requirement: RequirementModel; library: ComponentExample[] };
+type ExperimentDetail = ExperimentSummary & {
+  requirement: RequirementModel;
+  library: ComponentExample[];
+  layoutPlan?: LayoutPlan;
+  layoutPlanPageId?: string;
+};
 
 type GenerateDesignMessage = {
   type: 'generate-design';
@@ -1551,11 +1556,15 @@ async function applyLayoutPlanToCanvas(plan: LayoutPlan, page: PageDefinition) {
       Math.round(screen.height * region.height)
     );
     frame.clipsContent = false;
+    frame.cornerRadius = 12;
     frame.paddingLeft = padding;
     frame.paddingRight = padding;
     frame.paddingTop = padding;
     frame.paddingBottom = padding;
-    frame.itemSpacing = 12;
+    frame.itemSpacing = 8;
+    frame.strokes = [{ type: 'SOLID', color: hexToRgb('#CBD5E1') }];
+    frame.strokeWeight = 1;
+    frame.fills = [{ type: 'SOLID', color: hexToRgb('#FFFFFF'), opacity: 0 }];
 
     if (region.layout === 'horizontal') {
       frame.layoutMode = 'HORIZONTAL';
@@ -1572,31 +1581,7 @@ async function applyLayoutPlanToCanvas(plan: LayoutPlan, page: PageDefinition) {
     const regionInfoItems = region.items || [];
     if (region.layout === 'grid') {
       frame.layoutMode = 'NONE';
-      const cols = Math.max(1, region.columns || 2);
-      const gap = 12;
-      const cardWidth = (frame.width - padding * 2 - gap * (cols - 1)) / cols;
-      const cardHeight = Math.min(260, frame.height - padding * 2);
-      let col = 0;
-      let row = 0;
-      regionInfoItems.forEach((item) => {
-        const compNode = getComponentNodeForItem(item, plan, componentMap, regionInfoItems, page);
-        const clone = cloneComponentWithSlots(compNode, item, plan, componentLibrary, page);
-        if ('resize' in clone && typeof clone.resize === 'function') {
-          try {
-            (clone as LayoutMixin).resize(cardWidth, cardHeight);
-          } catch (_error) {
-            // ignore
-          }
-        }
-        clone.x = padding + col * (cardWidth + gap);
-        clone.y = padding + row * (cardHeight + gap);
-        frame.appendChild(clone);
-        col += 1;
-        if (col >= cols) {
-          col = 0;
-          row += 1;
-        }
-      });
+      layoutItemsFlow(frame, regionInfoItems, plan, componentMap, page, padding, 8);
     } else if (frame.layoutMode !== 'NONE') {
       regionInfoItems.forEach((item) => {
         const compNode = getComponentNodeForItem(item, plan, componentMap, regionInfoItems, page);
@@ -1608,16 +1593,7 @@ async function applyLayoutPlanToCanvas(plan: LayoutPlan, page: PageDefinition) {
       });
     } else {
       // absolute fallback
-      let y = padding;
-      const gap = 12;
-      regionInfoItems.forEach((item) => {
-        const compNode = getComponentNodeForItem(item, plan, componentMap, regionInfoItems, page);
-        const clone = cloneComponentWithSlots(compNode, item, plan, componentLibrary, page);
-        clone.x = padding;
-        clone.y = y;
-        y += clone.height + gap;
-        frame.appendChild(clone);
-      });
+      layoutItemsFlow(frame, regionInfoItems, plan, componentMap, page, padding, 8);
     }
 
     screen.appendChild(frame);
@@ -1769,6 +1745,54 @@ function ensureTextFontLoaded(text: TextNode) {
     text.fontName = activeFont;
   } catch (_error) {
     // ignore
+  }
+}
+
+function layoutItemsFlow(
+  frame: FrameNode,
+  items: LayoutRegion['items'],
+  plan: LayoutPlan,
+  componentMap: Map<string, SceneNode>,
+  page: PageDefinition,
+  padding: number,
+  gap: number
+) {
+  const maxWidth = Math.max(1, frame.width - padding * 2);
+  let x = padding;
+  let y = padding;
+  let rowHeight = 0;
+
+  items.forEach((item) => {
+    const compNode = getComponentNodeForItem(item, plan, componentMap, items, page);
+    const clone = cloneComponentWithSlots(compNode, item, plan, componentLibrary, page);
+    if ('resize' in clone && typeof clone.resize === 'function') {
+      const desiredWidth = Math.min((clone as LayoutMixin).width, maxWidth);
+      if (desiredWidth < (clone as LayoutMixin).width) {
+        const ratio = desiredWidth / (clone as LayoutMixin).width;
+        const desiredHeight = (clone as LayoutMixin).height * ratio;
+        try {
+          (clone as LayoutMixin).resize(desiredWidth, desiredHeight);
+        } catch (_error) {
+          // ignore
+        }
+      }
+    }
+    const nodeWidth = Math.min((clone as LayoutMixin).width, maxWidth);
+    if (x > padding && x + nodeWidth > frame.width - padding) {
+      x = padding;
+      y += rowHeight + gap;
+      rowHeight = 0;
+    }
+    (clone as LayoutMixin).x = x;
+    (clone as LayoutMixin).y = y;
+    frame.appendChild(clone);
+    x += nodeWidth + gap;
+    rowHeight = Math.max(rowHeight, (clone as LayoutMixin).height);
+  });
+
+  const finalHeight = y + rowHeight + padding;
+  if (finalHeight > frame.height) {
+    frame.resize(frame.width, finalHeight);
   }
 }
 
@@ -2553,6 +2577,11 @@ async function handleLoadExperiment(experimentId: string) {
       : [];
     await persistLibrary();
     currentExperimentId = detail.id;
+    if (detail.layoutPlan && detail.layoutPlanPageId) {
+      lastLayoutPlan = detail.layoutPlan;
+      lastLayoutPlanPageId = detail.layoutPlanPageId;
+      figma.ui.postMessage({ type: 'layout-plan', plan: detail.layoutPlan, fromExperiment: true });
+    }
     figma.ui.postMessage({
       type: 'experiment-loaded',
       id: detail.id,

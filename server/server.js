@@ -22,6 +22,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_BASE_URL = process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash-latest';
 
+const COMPONENT_LIB_PATH = path.join(__dirname, '..', 'data', 'component_lib.md');
 const LLM_LOG_DIR = path.join(__dirname, 'llm_logs');
 
 function ensureLLMLogDir() {
@@ -64,6 +65,19 @@ function logLLMInteraction(name, payload) {
     if (entry.error) console.log(`[llm:${name}] error ->`, entry.error);
   } catch (err) {
     console.error(`[llm:${name}] log failed`, err);
+  }
+}
+
+function loadComponentLibFromFile() {
+  try {
+    const raw = fs.readFileSync(COMPONENT_LIB_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed?.items)) return parsed.items;
+    console.warn('[component-lib] parsed but missing items array');
+    return [];
+  } catch (error) {
+    console.warn('[component-lib] load failed', error);
+    return [];
   }
 }
 
@@ -1789,6 +1803,21 @@ const experiments = [
   }
 
 ];
+
+// Sync production/safety experiment library with latest component_lib.md
+const externalComponentLib = loadComponentLibFromFile();
+if (externalComponentLib.length) {
+  const prodExp = experiments.find((exp) => exp.id === 'exp-prod-safety-v1');
+  if (prodExp) {
+    prodExp.library = externalComponentLib;
+    console.log(
+      '[component-lib] injected file library into exp-prod-safety-v1, items:',
+      externalComponentLib.length
+    );
+  } else {
+    console.warn('[component-lib] exp-prod-safety-v1 not found; skip inject');
+  }
+}
 
 // -------- EXPERIMENT ENDPOINTS --------
 app.get('/api/experiments', (_req, res) => {
