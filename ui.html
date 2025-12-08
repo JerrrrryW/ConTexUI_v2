@@ -375,6 +375,11 @@
         grid-template-columns: 1fr 2fr;
         gap: 12px;
       }
+      .grid-2-1 {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 12px;
+      }
       .card {
         border: 1px solid var(--panel-border);
         border-radius: var(--radius);
@@ -506,6 +511,22 @@
         display: block;
         margin-bottom: 2px;
         font-size: 11px;
+      }
+      .template-preview {
+        margin-top: 8px;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        border: 1px dashed var(--stroke);
+        border-radius: var(--radius-sm);
+        background: #0f121a;
+        position: relative;
+        overflow: hidden;
+      }
+      .tp-row {
+        position: absolute;
+        background: rgba(199, 255, 58, 0.08);
+        border: 1px solid rgba(199, 255, 58, 0.4);
+        border-radius: 6px;
       }
       .exp-item {
         border: 1px solid var(--panel-border);
@@ -784,58 +805,60 @@
             <button id="saveRequirementBinding" style="width: auto">保存绑定</button>
           </div>
         </div>
-        <div class="grid-2" style="margin-top: 10px">
+        <div class="grid-2-1" style="margin-top: 10px">
           <div class="card">
             <div class="section-title">
-              <h3>布局与草案</h3>
+              <h3>布局与生成</h3>
               <span class="pill-ghost">Step 3</span>
             </div>
-            <div class="two-col" style="margin-top: 6px">
-              <div>
-                <label>布局模式</label>
-                <select id="layoutMode">
-                  <option value="basic">基础网格</option>
-                  <option value="smart">智能布局</option>
-                </select>
-              </div>
-              <div>
-                <label>屏幕类型</label>
-                <select id="screenType">
-                  <option value="dashboard">通用仪表盘</option>
-                  <option value="factory">工厂总览</option>
-                  <option value="hud">飞行 HUD</option>
-                  <option value="ops">运维监控</option>
-                </select>
-              </div>
+            <div class="summary" id="layoutHint"></div>
+            <div class="row" style="gap: 8px; margin: 6px 0;">
+              <label style="display:flex;align-items:center;gap:4px;">
+                <input type="radio" name="layoutModeInner" value="smart" checked />
+                智能布局草案
+              </label>
+              <label style="display:flex;align-items:center;gap:4px;">
+                <input type="radio" name="layoutModeInner" value="template" />
+                基础模板
+              </label>
             </div>
-            <div class="two-col" style="margin-top: 6px">
-              <div>
-                <label>背景（选中节点作为背景，选填）</label>
-                <div class="row" style="gap: 6px; align-items: center">
-                  <button id="pickBackgroundBtn" style="width: auto">使用选中节点</button>
-                  <span id="backgroundPreview" class="summary"></span>
+            <div id="smartBlock">
+              <div class="two-col" style="margin-top: 6px">
+                <div>
+                  <label>屏幕类型</label>
+                  <select id="screenType">
+                    <option value="dashboard">通用仪表盘</option>
+                    <option value="factory">工厂总览</option>
+                    <option value="hud">飞行 HUD</option>
+                    <option value="ops">运维监控</option>
+                  </select>
+                </div>
+                <div>
+                  <label>提示</label>
+                  <div class="summary">基于已选页面 + 组件绑定生成智能草案</div>
                 </div>
               </div>
-              <div>
-                <label>布局操作</label>
-                <div class="row" style="gap: 6px">
-                  <button id="generatePlanBtn" style="width: auto">生成布局草案</button>
-                  <button id="applyPlanBtn" style="width: auto">生成到画布</button>
-                  <button id="fallbackPlanBtn" style="width: auto">基础模板</button>
+              <div class="two-col" style="margin-top: 6px">
+                <div>
+                  <label>背景（选中节点作为背景，选填）</label>
+                  <div class="row" style="gap: 6px; align-items: center">
+                    <button id="pickBackgroundBtn" style="width: auto">使用选中节点</button>
+                    <span id="backgroundPreview" class="summary"></span>
+                  </div>
                 </div>
-                <div id="layoutPlanStatus" class="summary"></div>
+                <div>
+                  <label>布局操作</label>
+                  <div class="row" style="gap: 6px">
+                    <button id="generatePlanBtn" style="width: auto">生成布局草案</button>
+                    <button id="applyPlanBtn" class="primary" style="width: auto">生成到画布</button>
+                  </div>
+                  <div id="layoutPlanStatus" class="summary"></div>
+                </div>
               </div>
+              <div id="layoutPreview" class="preview-box"></div>
             </div>
-            <div id="layoutPreview" class="preview-box"></div>
-          </div>
-
-          <div class="card">
-            <div class="section-title">
-              <h3>基础模板生成</h3>
-              <span class="pill-ghost">页面生成</span>
-            </div>
-            <div>
-              <label>布局模板</label>
+            <div id="templateBlock" style="display:none; margin-top: 8px;">
+              <label>基础模板</label>
               <select id="templateSelect">
                 <option value="two-col">双列</option>
                 <option value="three-col">三列</option>
@@ -843,36 +866,40 @@
                 <option value="dashboard">仪表盘</option>
               </select>
               <button id="generatePages" class="primary" style="margin-top: 8px; width: 100%">生成所选页面</button>
+              <div id="templatePreview" class="template-preview"></div>
+              <div class="summary">无组件绑定时将使用占位组件</div>
             </div>
-            <div style="margin-top: 12px">
-              <label>自由生成（LLM）</label>
-              <div class="two-col">
-                <div>
-                  <label>模型提供商</label>
-                  <select id="provider">
-                    <option value="siliconflow">SiliconFlow（OpenAI兼容）</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="gemini">Gemini</option>
-                  </select>
-                </div>
-                <div>
-                  <label>指令（自然语言）</label>
-                  <textarea
-                    id="prompt"
-                    rows="3"
-                    placeholder="例如：生成“姿态监控-正常飞行”页面"
-                  ></textarea>
-                </div>
-              </div>
-              <div class="row" style="align-items: center; margin-top: 8px">
-                <label style="margin: 0; display: flex; align-items: center; gap: 4px">
-                  <input id="useLibrary" type="checkbox" checked />
-                  生成时参考组件库
-                </label>
-                <button id="run" class="primary" style="width: auto">生成到画布</button>
-              </div>
-              <div id="status" class="status"></div>
+          </div>
+
+          <div class="card">
+            <div class="section-title">
+              <h3>LLM 自由生成（新页面）</h3>
+              <span class="pill-ghost">页面生成</span>
             </div>
+            <div>
+              <label>模型提供商</label>
+              <select id="provider">
+                <option value="siliconflow">SiliconFlow（OpenAI兼容）</option>
+                <option value="openai">OpenAI</option>
+                <option value="gemini">Gemini</option>
+              </select>
+            </div>
+            <div style="margin-top: 8px">
+              <label>指令（自然语言）</label>
+              <textarea
+                id="prompt"
+                rows="3"
+                placeholder="例如：生成“姿态监控-正常飞行”页面"
+              ></textarea>
+            </div>
+            <div class="row" style="align-items: center; margin-top: 8px">
+              <label style="margin: 0; display: flex; align-items: center; gap: 4px">
+                <input id="useLibrary" type="checkbox" checked />
+                生成时参考组件库
+              </label>
+              <button id="run" class="primary" style="width: auto">生成到画布</button>
+            </div>
+            <div id="status" class="status"></div>
           </div>
         </div>
       </div>
@@ -952,15 +979,18 @@
       const infoItemListEl = document.getElementById('infoItemList');
       const providerEl = document.getElementById('provider');
       const promptEl = document.getElementById('prompt');
-      const layoutModeEl = document.getElementById('layoutMode');
       const screenTypeEl = document.getElementById('screenType');
+      const layoutHintEl = document.getElementById('layoutHint');
+      const smartBlock = document.getElementById('smartBlock');
+      const templateBlock = document.getElementById('templateBlock');
+      const templatePreviewEl = document.getElementById('templatePreview');
+      const layoutModeInnerRadios = Array.from(document.querySelectorAll('input[name=\"layoutModeInner\"]'));
       const pickBackgroundBtn = document.getElementById('pickBackgroundBtn');
       const backgroundPreviewEl = document.getElementById('backgroundPreview');
       const layoutPlanStatusEl = document.getElementById('layoutPlanStatus');
       const layoutPreviewEl = document.getElementById('layoutPreview');
       const generatePlanBtn = document.getElementById('generatePlanBtn');
       const applyPlanBtn = document.getElementById('applyPlanBtn');
-      const fallbackPlanBtn = document.getElementById('fallbackPlanBtn');
       const exportWrap = document.getElementById('exportWrap');
       const exportText = document.getElementById('exportText');
       const copyExportBtn = document.getElementById('copyExport');
@@ -1002,6 +1032,7 @@
       let selectedPageIdSingle = null;
       const selectedPageIds = new Set();
       let selectedBindingPageId = null;
+      let layoutModeInner = 'smart';
       let selectedExperimentId = null;
       let experimentLoading = false;
       let loadedExperimentName = '';
@@ -1020,7 +1051,6 @@
       let backgroundNodeId = null;
       let selectedComponentId = null;
       if (applyPlanBtn) applyPlanBtn.disabled = true;
-      if (fallbackPlanBtn) fallbackPlanBtn.disabled = false;
 
       const updateComponentMeta = (id, payload) => {
         parent.postMessage({ pluginMessage: { type: 'update-component-meta', id, ...payload } }, '*');
@@ -1062,19 +1092,6 @@
           editStatusEl.dataset.state = 'loading';
         }
       };
-
-      if (layoutModeEl) {
-        layoutModeEl.onchange = () => {
-          if (layoutModeEl.value !== 'smart') {
-            layoutPlanStatusEl.textContent = '基础模式下可直接使用基础生成按钮';
-            layoutPlan = null;
-            renderLayoutPreview(null);
-            if (applyPlanBtn) applyPlanBtn.disabled = true;
-          } else {
-            layoutPlanStatusEl.textContent = '选择页面后生成布局草案';
-          }
-        };
-      }
 
       const setExperimentLoading = (isLoading) => {
         experimentLoading = isLoading;
@@ -1202,6 +1219,19 @@
       }
       if (librarySortEl) {
         librarySortEl.onchange = () => renderLibrary();
+      }
+      layoutModeInnerRadios.forEach((radio) => {
+        radio.onchange = () => {
+          layoutModeInner = radio.value;
+          const isTemplate = layoutModeInner === 'template';
+          if (smartBlock) smartBlock.style.display = isTemplate ? 'none' : 'block';
+          if (templateBlock) templateBlock.style.display = isTemplate ? 'block' : 'none';
+          if (isTemplate && templateSelect) renderTemplatePreview(templateSelect.value || 'two-col');
+          updateLayoutHint();
+        };
+      });
+      if (templateSelect) {
+        templateSelect.onchange = () => renderTemplatePreview(templateSelect.value || 'two-col');
       }
       if (openExperimentBtn && experimentModal) {
         openExperimentBtn.onclick = () => {
@@ -1582,11 +1612,11 @@
 
       if (generatePlanBtn) {
         generatePlanBtn.onclick = () => {
-          if (layoutModeEl.value !== 'smart') {
-            layoutPlanStatusEl.textContent = '请切换到智能布局模式';
+          if (layoutModeInner !== 'smart') {
+            layoutPlanStatusEl.textContent = '当前为基础模板，请切换到智能布局模式';
             return;
           }
-          if (!selectedPageId) {
+          if (!selectedBindingPageId) {
             layoutPlanStatusEl.textContent = '请先选择页面';
             return;
           }
@@ -1595,7 +1625,7 @@
             {
               pluginMessage: {
                 type: 'generate-layout-plan',
-                pageId: selectedPageId,
+                pageId: selectedBindingPageId,
                 screenType: screenTypeEl.value,
                 backgroundNodeId
               }
@@ -1605,25 +1635,11 @@
         };
       }
 
-      if (fallbackPlanBtn) {
-        fallbackPlanBtn.onclick = () => {
-          if (!selectedPageIds.size) {
-            layoutPlanStatusEl.textContent = '请选择至少一个页面';
-            return;
-          }
-          const pageIds = Array.from(selectedPageIds);
-          const template = templateSelect.value || 'two-col';
-          parent.postMessage({
-            pluginMessage: { type: 'generate-pages', pageIds, template, useLibrary: true }
-          }, '*');
-          layoutPlanStatusEl.textContent = '智能布局失败，已用基础模板生成…';
-        };
-      }
 
       if (applyPlanBtn) {
         applyPlanBtn.onclick = () => {
-          if (layoutModeEl.value !== 'smart') {
-            layoutPlanStatusEl.textContent = '当前为基础模式，请使用基础生成按钮';
+          if (layoutModeInner !== 'smart') {
+            layoutPlanStatusEl.textContent = '当前为基础模板，请切换到智能布局模式';
             return;
           }
           if (!layoutPlan) {
@@ -1888,6 +1904,7 @@
             selectedBindingPageId = page.id;
             renderPageListBinding();
             renderPageInfoBinding(page);
+            updateLayoutHint();
           };
           pageListBindingEl.appendChild(row);
         });
@@ -1904,6 +1921,7 @@
           selectedBindingPageId = current?.id || null;
           if (selectedBindingPageId) renderPageInfoBinding(current);
         }
+        updateLayoutHint();
       };
 
       const renderPageInfoBinding = (page) => {
@@ -1955,6 +1973,7 @@
             bindingSelect.value = currentBinding?.componentId || '';
             bindingSelect.onchange = () => {
               setBinding(page, item.infoItemId, bindingSelect.value);
+              updateLayoutHint();
             };
 
             row.appendChild(tierBadge);
@@ -1997,6 +2016,7 @@
           bindings.push({ infoItemId, componentId: componentId || undefined });
         }
         page.preferredBindings = bindings;
+        updateLayoutHint();
       };
 
       const canAssignTier = (page, currentItem, nextTier) => {
@@ -2010,12 +2030,66 @@
         return true;
       };
 
+      const updateLayoutHint = () => {
+        if (!layoutHintEl) return;
+        const selectedCount = selectedPageIds.size;
+        const bindingCount = requirement?.pages
+          ? requirement.pages.reduce((acc, p) => {
+              const num = (p.preferredBindings || []).filter((b) => b.componentId).length;
+              return acc + num;
+            }, 0)
+          : 0;
+        layoutHintEl.textContent = `已选页面 ${selectedCount} 个 · 已绑定 ${bindingCount} 条`;
+        const isSmart = layoutModeInner === 'smart';
+        if (generatePlanBtn) generatePlanBtn.disabled = !isSmart || selectedCount === 0;
+        if (applyPlanBtn) applyPlanBtn.disabled = !isSmart || selectedCount === 0 || !lastLayoutPlan;
+        if (generatePagesBtn) generatePagesBtn.disabled = selectedCount === 0;
+      };
+
+      const renderTemplatePreview = (tpl) => {
+        if (!templatePreviewEl) return;
+        templatePreviewEl.innerHTML = '';
+        const presets = {
+          'two-col': [
+            { x: 5, y: 5, w: 44, h: 90 },
+            { x: 51, y: 5, w: 44, h: 90 }
+          ],
+          'three-col': [
+            { x: 3, y: 5, w: 30, h: 90 },
+            { x: 35, y: 5, w: 30, h: 90 },
+            { x: 67, y: 5, w: 30, h: 90 }
+          ],
+          'main-side': [
+            { x: 3, y: 5, w: 62, h: 90 },
+            { x: 68, y: 5, w: 29, h: 90 }
+          ],
+          dashboard: [
+            { x: 3, y: 5, w: 62, h: 50 },
+            { x: 68, y: 5, w: 29, h: 50 },
+            { x: 3, y: 60, w: 30, h: 35 },
+            { x: 35, y: 60, w: 62, h: 35 }
+          ]
+        };
+        const cells = presets[tpl] || presets['two-col'];
+        cells.forEach((c) => {
+          const div = document.createElement('div');
+          div.className = 'tp-row';
+          div.style.left = `${c.x}%`;
+          div.style.top = `${c.y}%`;
+          div.style.width = `${c.w}%`;
+          div.style.height = `${c.h}%`;
+          templatePreviewEl.appendChild(div);
+        });
+      };
+
       // Request library & requirement on load
       parent.postMessage({ pluginMessage: { type: 'request-library' } }, '*');
       parent.postMessage({ pluginMessage: { type: 'request-requirement' } }, '*');
       renderEditOps([], '');
       renderExperiments();
       renderLayoutPreview(null);
+      updateLayoutHint();
+      if (templateSelect) renderTemplatePreview(templateSelect.value || 'two-col');
 
       window.onmessage = (event) => {
         const msg = event.data.pluginMessage;
@@ -2069,7 +2143,6 @@
         if (msg.type === 'layout-plan-error') {
           layoutPlanStatusEl.textContent = `布局方案失败：${msg.message || ''}`;
           if (applyPlanBtn) applyPlanBtn.disabled = true;
-          if (fallbackPlanBtn) fallbackPlanBtn.disabled = false;
           return;
         }
 
