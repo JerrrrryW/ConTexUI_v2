@@ -13,7 +13,7 @@ app.use(express.json({ limit: '2mb' }));
 
 const PORT = process.env.PORT || 4000;
 const HOST = process.env.HOST || '127.0.0.1';
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'REDACTED_OPENAI_API_KEY';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.siliconflow.cn/v1';
 const MODEL = process.env.OPENAI_MODEL || 'Qwen/Qwen3-235B-A22B-Instruct-2507';
 const PARSE_MODEL = process.env.PARSE_MODEL || MODEL;
