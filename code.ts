@@ -147,7 +147,7 @@ type RequestSlotsMessage = { type: 'request-slots'; id: string };
 type SaveSlotsMessage = { type: 'save-slots'; id: string; slots: ComponentSlot[] };
 type EnrichLibraryMessage = { type: 'enrich-library' };
 type UpdateRequirementMessage = { type: 'update-requirement'; data: RequirementModel };
-type RecommendBindingsMessage = { type: 'recommend-bindings'; pageId?: string };
+type RecommendBindingsMessage = { type: 'recommend-bindings'; pageId?: string; pageIds?: string[] };
 type UpdateNoteMessage = { type: 'update-note'; id: string; note: string };
 type RemoveComponentMessage = { type: 'remove-component'; id: string };
 type EditPageMessage = {
@@ -160,11 +160,12 @@ type UndoEditMessage = { type: 'undo-edit' };
 type LoadExperimentMessage = { type: 'load-experiment'; experimentId: string };
 type GenerateLayoutPlanMessage = {
   type: 'generate-layout-plan';
-  pageId: string;
+  pageId?: string;
+  pageIds?: string[];
   screenType?: string;
   backgroundNodeId?: string;
 };
-type ApplyLayoutPlanMessage = { type: 'apply-layout-plan' };
+type ApplyLayoutPlanMessage = { type: 'apply-layout-plan'; pageIds?: string[] };
 type SetBackgroundFromSelectionMessage = { type: 'set-background-from-selection' };
 type PluginMessage =
   | GenerateDesignMessage
@@ -329,8 +330,7 @@ let componentLibrary: ComponentExample[] = [];
 let requirementModel: RequirementModel | null = null;
 let lastEditBackup: { frameId: string; backupId: string } | null = null;
 let currentExperimentId: string | null = null;
-let lastLayoutPlan: LayoutPlan | null = null;
-let lastLayoutPlanPageId: string | null = null;
+let lastLayoutPlans: Record<string, LayoutPlan> = {};
 let lastBackgroundNodeId: string | null = null;
 type LayoutTemplate = 'two-col' | 'three-col' | 'main-side' | 'dashboard';
 
@@ -737,7 +737,7 @@ async function handleRecommendBindings(pageId?: string) {
   try {
     sendStatus('loading', '正在推荐组件');
     const result = await callRecommendComponents(requirementModel.infoItems, componentLibrary);
-    applyRecommendedBindings(result, pageId);
+    applyRecommendedBindings(result, pageId ? [pageId] : undefined);
     await persistRequirement(requirementModel);
     sendRequirementToUI();
     figma.notify('已更新推荐组件');
@@ -2213,12 +2213,12 @@ function mergeArrays(a?: string[], b?: string[]): string[] | undefined {
   return merged.size ? Array.from(merged) : undefined;
 }
 
-function applyRecommendedBindings(result: RecommendComponentsResponse, pageId?: string) {
+function applyRecommendedBindings(result: RecommendComponentsResponse, pageIds?: string[]) {
   if (!requirementModel?.pages) return;
   const infoMap = new Map<string, InfoItem>();
   (requirementModel.infoItems || []).forEach((i) => infoMap.set(i.id, i));
-  const targetPages = pageId
-    ? requirementModel.pages.filter((p) => p.id === pageId)
+  const targetPages = Array.isArray(pageIds) && pageIds.length
+    ? requirementModel.pages.filter((p) => pageIds.indexOf(p.id) !== -1)
     : requirementModel.pages;
 
   const dataTypeComponentMap = new Map<string, string>();
@@ -2578,10 +2578,14 @@ async function handleLoadExperiment(experimentId: string) {
       : [];
     await persistLibrary();
     currentExperimentId = detail.id;
+    lastLayoutPlans = {};
     if (detail.layoutPlan && detail.layoutPlanPageId) {
-      lastLayoutPlan = detail.layoutPlan;
-      lastLayoutPlanPageId = detail.layoutPlanPageId;
-      figma.ui.postMessage({ type: 'layout-plan', plan: detail.layoutPlan, fromExperiment: true });
+      lastLayoutPlans[detail.layoutPlanPageId] = detail.layoutPlan;
+    figma.ui.postMessage({
+      type: 'layout-plan',
+      plans: [{ pageId: detail.layoutPlanPageId, plan: detail.layoutPlan }],
+      fromExperiment: true
+    });
     }
     figma.ui.postMessage({
       type: 'experiment-loaded',
@@ -2603,24 +2607,33 @@ async function handleGenerateLayoutPlan(msg: GenerateLayoutPlanMessage) {
     figma.ui.postMessage({ type: 'layout-plan-error', message: '请先解析需求或加载场景' });
     return;
   }
-  const page = requirementModel.pages.find((p) => p.id === msg.pageId) || requirementModel.pages[0];
-  if (!page) {
+  const targets =
+    (Array.isArray(msg.pageIds) && msg.pageIds.length
+      ? msg.pageIds
+      : msg.pageId
+      ? [msg.pageId]
+      : []).map((id) => requirementModel?.pages.find((p) => p.id === id)).filter(Boolean) as PageDefinition[];
+  const pages = targets.length ? targets : requirementModel.pages.slice(0, 1);
+  if (!pages.length) {
     figma.ui.postMessage({ type: 'layout-plan-error', message: '未找到页面' });
     return;
   }
   try {
     sendStatus('loading', '生成布局方案中');
-    const plan = await callLayoutPlan({
-      page,
-      requirement: requirementModel,
-      library: componentLibrary,
-      screenType: msg.screenType,
-      backgroundNodeId: msg.backgroundNodeId || lastBackgroundNodeId
-    });
-    lastLayoutPlan = plan;
-    lastLayoutPlanPageId = page.id;
+    const plans: { pageId: string; plan: LayoutPlan }[] = [];
+    for (const page of pages) {
+      const plan = await callLayoutPlan({
+        page,
+        requirement: requirementModel,
+        library: componentLibrary,
+        screenType: msg.screenType,
+        backgroundNodeId: msg.backgroundNodeId || lastBackgroundNodeId
+      });
+      plans.push({ pageId: page.id, plan });
+      lastLayoutPlans[page.id] = plan;
+    }
     lastBackgroundNodeId = msg.backgroundNodeId || lastBackgroundNodeId;
-    figma.ui.postMessage({ type: 'layout-plan', plan });
+    figma.ui.postMessage({ type: 'layout-plan', plans });
     sendStatus('success', '已生成布局方案');
   } catch (error) {
     figma.ui.postMessage({ type: 'layout-plan-error', message: getErrorMessage(error) });
@@ -2630,22 +2643,29 @@ async function handleGenerateLayoutPlan(msg: GenerateLayoutPlanMessage) {
   }
 }
 
-async function handleApplyLayoutPlan() {
-  if (!lastLayoutPlan || !lastLayoutPlanPageId || !requirementModel) {
+async function handleApplyLayoutPlan(msg?: ApplyLayoutPlanMessage) {
+  if (!requirementModel || !Object.keys(lastLayoutPlans).length) {
     figma.notify('请先生成布局方案');
     figma.ui.postMessage({ type: 'layout-plan-error', message: '未找到布局方案' });
     return;
   }
-  const page = requirementModel.pages.find((p) => p.id === lastLayoutPlanPageId);
-  if (!page) {
-    figma.notify('布局方案对应的页面不存在');
+  const pageIds =
+    (msg?.pageIds && msg.pageIds.length
+      ? msg.pageIds
+      : Object.keys(lastLayoutPlans)) || [];
+  const targets = requirementModel.pages.filter((p) => pageIds.indexOf(p.id) !== -1);
+  if (!targets.length) {
     figma.ui.postMessage({ type: 'layout-plan-error', message: '页面不存在' });
     return;
   }
   try {
     sendStatus('loading', '生成布局到画布');
-    await applyLayoutPlanToCanvas(lastLayoutPlan, page);
-    figma.ui.postMessage({ type: 'layout-plan-applied' });
+    for (const page of targets) {
+      const plan = lastLayoutPlans[page.id];
+      if (!plan) continue;
+      await applyLayoutPlanToCanvas(plan, page);
+    }
+    figma.ui.postMessage({ type: 'layout-plan-applied', pageIds });
     sendStatus('success', '已生成到画布');
   } catch (error) {
     figma.notify(`生成失败：${getErrorMessage(error)}`);

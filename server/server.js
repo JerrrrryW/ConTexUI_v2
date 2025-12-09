@@ -5,7 +5,11 @@ const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fet
 const fs = require('fs');
 const path = require('path');
 
+// Load env from project root .env, then fallback to server/.env if still missing
 dotenv.config();
+if (!process.env.OPENAI_API_KEY) {
+  dotenv.config({ path: path.join(__dirname, '.env') });
+}
 
 const app = express();
 app.use(cors());
@@ -2172,7 +2176,50 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 
 app.listen(PORT, HOST, () => {
   console.log(`enrich-library server listening on http://${HOST}:${PORT}`);
+  verifyOpenAIKeyOnStartup();
 });
+
+async function verifyOpenAIKeyOnStartup() {
+  if (!OPENAI_API_KEY) {
+    console.warn('[startup] OPENAI_API_KEY missing, skip LLM verification');
+    return;
+  }
+
+  const llmUrl = `${OPENAI_BASE_URL}/chat/completions`;
+  const llmBody = {
+    model: 'Qwen/Qwen2-7B-Instruct',
+    temperature: 0,
+    messages: [
+      { role: 'system', content: 'You are a lightweight health check.' },
+      { role: 'user', content: '请简单回复“ok”。' }
+    ]
+  };
+
+  try {
+    console.log('[startup] verifying OPENAI_API_KEY with Qwen/Qwen2-7B-Instruct...');
+    const completion = await fetch(llmUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
+      body: JSON.stringify(llmBody)
+    });
+    const raw = await completion.text();
+    if (!completion.ok) {
+      console.error('[startup] LLM healthcheck failed', completion.status, raw.slice(0, 400));
+      return;
+    }
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {
+      console.warn('[startup] LLM healthcheck response is not valid JSON');
+      return;
+    }
+    const content = data.choices?.[0]?.message?.content || '';
+    console.log('[startup] LLM healthcheck ok, reply:', String(content).slice(0, 100));
+  } catch (error) {
+    console.error('[startup] LLM healthcheck exception', error);
+  }
+}
 
 // -------- SYSTEM PROMPTS --------
 const ENRICH_SYSTEM_PROMPT = `

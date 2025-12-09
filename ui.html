@@ -415,15 +415,15 @@
         left: 16px;
         bottom: 16px;
         padding: 10px 14px;
-        border-radius: 999px;
+        border-radius: 16px;
         border: 1px solid var(--panel-border);
-        background: var(--panel-strong);
         color: var(--text);
         box-shadow: var(--shadow);
         cursor: pointer;
       }
       .floating-exp:hover {
         border-color: var(--accent);
+        background: var(--panel-strong);
         color: var(--accent);
       }
       .modal {
@@ -952,7 +952,7 @@
         </div>
       </div>
     </div>
-    <!-- <button id="openExperiment" class="floating-exp">实验预设</button> -->
+    <button id="openExperiment" class="floating-exp">实验预设</button>
     <div id="experimentModal" class="modal">
       <div class="modal-backdrop"></div>
       <div class="modal-card">
@@ -1045,6 +1045,7 @@
       const selectedPageIds = new Set();
       let selectedBindingPageId = null;
       let layoutModeInner = 'smart';
+      let layoutPlansMap = {};
       let selectedExperimentId = null;
       let experimentLoading = false;
       let loadedExperimentName = '';
@@ -1635,7 +1636,8 @@
             layoutPlanStatusEl.textContent = '请先为所选页面绑定全部信息项';
             return;
           }
-          if (!selectedBindingPageId) {
+          const pageIds = Array.from(selectedPageIds);
+          if (!pageIds.length) {
             layoutPlanStatusEl.textContent = '请先选择页面';
             return;
           }
@@ -1644,7 +1646,7 @@
             {
               pluginMessage: {
                 type: 'generate-layout-plan',
-                pageId: selectedBindingPageId,
+                pageIds,
                 screenType: screenTypeEl.value,
                 backgroundNodeId
               }
@@ -1661,12 +1663,17 @@
             layoutPlanStatusEl.textContent = '当前为基础模板，请切换到智能布局模式';
             return;
           }
+          const pageIds = Array.from(selectedPageIds);
+          if (!pageIds.length) {
+            layoutPlanStatusEl.textContent = '请先选择页面';
+            return;
+          }
           if (!layoutPlan) {
             layoutPlanStatusEl.textContent = '请先生成布局方案';
             return;
           }
           layoutPlanStatusEl.textContent = '正在生成到画布…';
-          parent.postMessage({ pluginMessage: { type: 'apply-layout-plan' } }, '*');
+          parent.postMessage({ pluginMessage: { type: 'apply-layout-plan', pageIds } }, '*');
         };
       }
 
@@ -1703,13 +1710,14 @@
       }
 
       recommendBtn.onclick = () => {
-        if (!selectedBindingPageId) {
+        const pageIds = Array.from(selectedPageIds);
+        if (!pageIds.length) {
           statusEl.textContent = '请先选择页面';
           statusEl.dataset.state = 'error';
           return;
         }
         statusEl.textContent = '向 AI 请求组件推荐…';
-        parent.postMessage({ pluginMessage: { type: 'recommend-bindings', pageId: selectedBindingPageId } }, '*');
+        parent.postMessage({ pluginMessage: { type: 'recommend-bindings', pageIds } }, '*');
       };
 
       generatePagesBtn.onclick = () => {
@@ -1907,38 +1915,52 @@
         requirement.pages.forEach((page) => {
           const row = document.createElement('div');
           row.className = 'req-item';
-          if (selectedPageIds.has(page.id)) row.classList.add('active');
+          if (selectedBindingPageId === page.id) row.classList.add('active');
+          row.style.display = 'grid';
+          row.style.gridTemplateColumns = '24px 1fr';
+          row.style.alignItems = 'center';
+          row.style.columnGap = '8px';
           const phase = requirement.phases?.find((p) => p.id === page.phaseId);
           const role = requirement.roles?.find((r) => r.id === page.roleId);
           const cond = requirement.conditions?.find((c) => c.id === page.conditionId);
-          row.innerHTML = `
-            <div>${page.name || '未命名页面'}</div>
-            <div class="summary">
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.checked = selectedPageIds.has(page.id);
+          checkbox.onclick = (e) => {
+            e.stopPropagation();
+            if (checkbox.checked) selectedPageIds.add(page.id);
+            else selectedPageIds.delete(page.id);
+            if (!selectedPageIds.size) {
+              selectedBindingPageId = null;
+              if (pageInfoBindingEl) pageInfoBindingEl.innerHTML = '请选择页面';
+            }
+            updateLayoutHint();
+          };
+          const content = document.createElement('div');
+          content.style.display = 'flex';
+          content.style.flexDirection = 'column';
+          content.style.gap = '4px';
+          const title = document.createElement('div');
+          title.textContent = page.name || '未命名页面';
+          const meta = document.createElement('div');
+          meta.className = 'summary';
+          meta.innerHTML = `
               <span class="pill">${phase?.name || 'Phase'}</span>
               <span class="pill">${role?.name || 'Role'}</span>
               <span class="pill">${cond?.name || 'Condition'}</span>
-            </div>
           `;
+          content.appendChild(title);
+          content.appendChild(meta);
+          row.appendChild(checkbox);
+          row.appendChild(content);
           row.onclick = () => {
-            const wasSelected = selectedPageIds.has(page.id);
-            if (wasSelected) {
-              selectedPageIds.delete(page.id);
-            } else {
-              selectedPageIds.add(page.id);
-            }
-            if (!selectedPageIds.size) {
-              selectedBindingPageId = null;
-            } else if (!selectedBindingPageId || !selectedPageIds.has(selectedBindingPageId)) {
-              selectedBindingPageId = Array.from(selectedPageIds)[0];
-            }
-            renderPageListBinding();
+            selectedBindingPageId = page.id;
+            renderPageInfoBinding(page);
+            renderPageListBinding(false);
             updateLayoutHint();
           };
           pageListBindingEl.appendChild(row);
         });
-        if (!selectedBindingPageId || !selectedPageIds.has(selectedBindingPageId)) {
-          selectedBindingPageId = null;
-        }
         if (selectedBindingPageId) {
           const current = requirement.pages.find((p) => p.id === selectedBindingPageId) || null;
           if (current) renderPageInfoBinding(current);
@@ -2214,9 +2236,20 @@
         }
 
         if (msg.type === 'layout-plan') {
-          layoutPlan = msg.plan || null;
-          layoutPlanStatusEl.textContent = '已生成布局方案';
-          renderLayoutPreview(layoutPlan);
+          layoutPlansMap = {};
+          if (Array.isArray(msg.plans)) {
+            msg.plans.forEach((p) => {
+              if (p?.pageId && p?.plan) layoutPlansMap[p.pageId] = p.plan;
+            });
+            const firstPlan = msg.plans[0]?.plan || null;
+            layoutPlan = firstPlan;
+            layoutPlanStatusEl.textContent = `已生成 ${msg.plans.length} 个布局方案`;
+            renderLayoutPreview(firstPlan);
+          } else {
+            layoutPlan = msg.plan || null;
+            layoutPlanStatusEl.textContent = '已生成布局方案';
+            renderLayoutPreview(layoutPlan);
+          }
           if (applyPlanBtn) applyPlanBtn.disabled = false;
           return;
         }
