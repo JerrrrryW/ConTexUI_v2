@@ -553,7 +553,7 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
   }
 
   if (msg.type === 'recommend-bindings') {
-    await handleRecommendBindings(msg.pageId);
+    await handleRecommendBindings(msg.pageIds && msg.pageIds.length ? msg.pageIds : msg.pageId ? [msg.pageId] : undefined);
     return;
   }
 
@@ -729,7 +729,7 @@ async function handleEnrichLibrary() {
   }
 }
 
-async function handleRecommendBindings(pageId?: string) {
+async function handleRecommendBindings(pageIds?: string[]) {
   if (!requirementModel) {
     figma.notify('请先解析需求文档');
     return;
@@ -737,7 +737,7 @@ async function handleRecommendBindings(pageId?: string) {
   try {
     sendStatus('loading', '正在推荐组件');
     const result = await callRecommendComponents(requirementModel.infoItems, componentLibrary);
-    applyRecommendedBindings(result, pageId ? [pageId] : undefined);
+    applyRecommendedBindings(result, pageIds && pageIds.length ? pageIds : undefined);
     await persistRequirement(requirementModel);
     sendRequirementToUI();
     figma.notify('已更新推荐组件');
@@ -1546,6 +1546,8 @@ async function applyLayoutPlanToCanvas(plan: LayoutPlan, page: PageDefinition) {
   }
   const componentMap = await loadComponentsByIds(Array.from(ids));
   const padding = 16;
+  const priorityMap = new Map<string, number>();
+  (page.infoPriorities || []).forEach((p) => priorityMap.set(p.infoItemId, p.priority));
 
   plan.regions.forEach((region) => {
     const frame = figma.createFrame();
@@ -1586,7 +1588,9 @@ async function applyLayoutPlanToCanvas(plan: LayoutPlan, page: PageDefinition) {
     } else if (frame.layoutMode !== 'NONE') {
       regionInfoItems.forEach((item) => {
         const compNode = getComponentNodeForItem(item, plan, componentMap, regionInfoItems, page);
-        const clone = cloneComponentWithSlots(compNode, item, plan, componentLibrary, page);
+        const info = requirementModel?.infoItems.find((i) => i.id === item.infoItemId);
+        const priority = priorityMap.get(item.infoItemId);
+        const clone = cloneComponentWithSlots(compNode, item, plan, componentLibrary, page, info, priority);
         if ('layoutAlign' in clone) {
           (clone as LayoutMixin).layoutAlign = 'STRETCH';
         }
@@ -1638,9 +1642,10 @@ function cloneComponentWithSlots(
   item: LayoutRegion['items'][number],
   plan: LayoutPlan,
   library: ComponentExample[],
-  page: PageDefinition
+  page: PageDefinition,
+  info?: InfoItem,
+  priority?: number
 ): FrameNode | SceneNode {
-  const info = requirementModel?.infoItems.find((i) => i.id === item.infoItemId);
   const infoName = info?.name || item.infoItemId;
   if (!source) {
     const placeholder = figma.createFrame();
@@ -1679,7 +1684,11 @@ function cloneComponentWithSlots(
         content: (pageBinding.slotHints as Record<string, string>)[slotName]
       }))
     : [];
-  applySlotBindings(clone, compMeta, idMap, slotBindings, infoName, info?.description);
+  applySlotBindings(clone, compMeta, idMap, slotBindings, info, priority);
+  if (compMeta) {
+    const compName = compMeta.name || clone.name || '组件';
+    clone.name = `${infoName} · P${typeof priority === 'number' ? priority : '-'} · ${compName}`;
+  }
   return clone;
 }
 
@@ -1706,8 +1715,8 @@ function applySlotBindings(
   compMeta: ComponentExample | undefined,
   idMap: Map<string, string>,
   bindings: SlotBinding[],
-  fallbackTitle?: string,
-  fallbackDesc?: string
+  info?: InfoItem,
+  priority?: number
 ) {
   if (!compMeta || !Array.isArray(compMeta.slots) || !compMeta.slots.length) return;
   const byName = new Map<string, ComponentSlot>();
@@ -1721,22 +1730,33 @@ function applySlotBindings(
       }
     }
   };
+  const priorityLabel = typeof priority === 'number' ? ` (P${priority})` : '';
   bindings.forEach((b) => {
     const slot = byName.get(b.slotName);
     if (!slot) return;
     const mappedId = idMap.get(slot.nodeId) || slot.nodeId;
-    setText(mappedId, b.content);
+    setText(mappedId, b.content + priorityLabel);
   });
-  if (!bindings.length && fallbackTitle) {
+  if (!bindings.length && info) {
     const titleSlot = compMeta.slots.find((s) => s.slotType === 'label' || s.slotName === 'title');
     if (titleSlot) {
       const mappedId = idMap.get(titleSlot.nodeId) || titleSlot.nodeId;
-      setText(mappedId, fallbackTitle);
+      setText(mappedId, (info.name || info.id) + priorityLabel);
     }
     const valueSlot = compMeta.slots.find((s) => s.slotType === 'numericValue');
-    if (valueSlot && fallbackDesc) {
+    if (valueSlot) {
       const mappedId = idMap.get(valueSlot.nodeId) || valueSlot.nodeId;
-      setText(mappedId, fallbackDesc);
+      setText(mappedId, (info.description || info.name || info.id) + priorityLabel);
+    }
+    const stateSlot = compMeta.slots.find((s) => s.slotType === 'state' || s.slotType === 'alert');
+    if (stateSlot) {
+      const mappedId = idMap.get(stateSlot.nodeId) || stateSlot.nodeId;
+      setText(mappedId, (info.description || info.name || info.id) + priorityLabel);
+    }
+    const unitSlot = compMeta.slots.find((s) => s.slotType === 'unit');
+    if (unitSlot) {
+      const mappedId = idMap.get(unitSlot.nodeId) || unitSlot.nodeId;
+      setText(mappedId, info.semanticTags?.join('/') || '');
     }
   }
 }
