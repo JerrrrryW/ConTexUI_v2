@@ -1,40 +1,22 @@
-Below are the steps to get your plugin running. You can also find instructions at:
+## ConTexUI v2 — 多 Agent + Trace 版
 
-  https://www.figma.com/plugin-docs/plugin-quickstart-guide/
+### 能力概览
+- 后端编排器：抽取 → NSGA-II 信息层级平衡 → 两段式组件检索（算法候选 + LLM 裁决），全过程写入 Trace（`server/traces/*.json`）。
+- 抽取健壮性：解析结果自带 completeness 标记，缺字段会在 UI 明示，不会静默失败。
+- Trace 导出：UI 里可一键导出/复制最近一次运行的 Trace，包含 agent 顺序、迭代轮次、候选与裁决信息。
+- 组件检索：严格“算法检索只读优先级 → LLM 最终裁决”，不会反写信息层级。
 
-This plugin template uses Typescript and NPM, two standard tools in creating JavaScript applications.
+### 启动
+1) 安装依赖：`npm install`  
+2) 运行本地后端：`cd server && node server.js`（默认 `http://localhost:4000`，需环境变量 `OPENAI_API_KEY` 或预置 GEMINI_KEY）。  
+3) Figma 中加载插件开发版本，确保 manifest 的 devAllowedDomains 包含 `http://localhost:4000`。
 
-First, download Node.js which comes with NPM. This will allow you to install TypeScript and other
-libraries. You can find the download link here:
+### 关键操作
+- **多 Agent 生成 + Trace**：在“需求文档”区域粘贴文本，点击“多 Agent 生成 + Trace”，等待完成后可在“Trace 导出”卡片查看/复制 JSON。
+- **抽取提示**：若解析缺少阶段/角色/条件/信息项/页面，UI 会显示“抽取缺失字段…”，需补充文档后重跑。
+- **组件检索**：绑定页的 AI 推荐已改为两段式检索，检索阶段不修改优先级。
 
-  https://nodejs.org/en/download/
-
-Next, install TypeScript using the command:
-
-  npm install -g typescript
-
-Finally, in the directory of your plugin, get the latest type definitions for the plugin API by running:
-
-  npm install --save-dev @figma/plugin-typings
-
-If you are familiar with JavaScript, TypeScript will look very familiar. In fact, valid JavaScript code
-is already valid Typescript code.
-
-TypeScript adds type annotations to variables. This allows code editors such as Visual Studio Code
-to provide information about the Figma API while you are writing code, as well as help catch bugs
-you previously didn't notice.
-
-For more information, visit https://www.typescriptlang.org/
-
-Using TypeScript requires a compiler to convert TypeScript (code.ts) into JavaScript (code.js)
-for the browser to run.
-
-We recommend writing TypeScript code using Visual Studio code:
-
-1. Download Visual Studio Code if you haven't already: https://code.visualstudio.com/.
-2. Open this directory in Visual Studio Code.
-3. Compile TypeScript to JavaScript: Run the "Terminal > Run Build Task..." menu item,
-    then select "npm: watch". You will have to do this again every time
-    you reopen Visual Studio Code.
-
-That's it! Visual Studio Code will regenerate the JavaScript file every time you save.
+### 目录说明
+- `code.ts`：插件主逻辑与 orchestrator 调用、Trace 导出、错误提示。
+- `ui.html`：界面（多 Agent 入口、Trace 导出、抽取缺失提示）。
+- `server/server.js`：编排器、NSGA-II 平衡、两段式检索、Trace 持久化。

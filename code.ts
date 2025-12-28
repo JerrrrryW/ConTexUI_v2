@@ -124,6 +124,8 @@ type RequestLibraryMessage = { type: 'request-library' };
 type ExportLibraryMessage = { type: 'export-library' };
 type ParseDocumentMessage = { type: 'parse-doc'; docText: string };
 type RequestRequirementMessage = { type: 'request-requirement' };
+type OrchestrateRunMessage = { type: 'orchestrate-run'; docText: string; screenType?: string };
+type ExportTraceMessage = { type: 'export-trace'; traceId?: string };
 type UpdateComponentMetaMessage = {
   type: 'update-component-meta';
   id: string;
@@ -175,6 +177,8 @@ type PluginMessage =
   | ExportLibraryMessage
   | ParseDocumentMessage
   | RequestRequirementMessage
+  | OrchestrateRunMessage
+  | ExportTraceMessage
   | UpdateComponentMetaMessage
   | RequestSlotsMessage
   | SaveSlotsMessage
@@ -332,6 +336,7 @@ let lastEditBackup: { frameId: string; backupId: string } | null = null;
 let currentExperimentId: string | null = null;
 let lastLayoutPlans: Record<string, LayoutPlan> = {};
 let lastBackgroundNodeId: string | null = null;
+let lastTraceId: string | null = null;
 type LayoutTemplate = 'two-col' | 'three-col' | 'main-side' | 'dashboard';
 
 const DEFAULT_LAYER_STATS: LayerStats = {
@@ -482,6 +487,16 @@ initializeRequirement();
 fetchExperimentsList();
 
 figma.ui.onmessage = async (msg: PluginMessage) => {
+  if (msg.type === 'orchestrate-run') {
+    await handleOrchestrateRun(msg);
+    return;
+  }
+
+  if (msg.type === 'export-trace') {
+    await handleExportTrace(msg);
+    return;
+  }
+
   if (msg.type === 'generate-pages') {
     await generatePages(msg.template, msg.pageIds, msg.useLibrary ?? true);
     return;
@@ -2398,9 +2413,17 @@ function sendEditStatus(state: StatusMessage['state'], message?: string) {
 
 // --- Backend stubs (to be wired to real endpoints) ---
 
-type ParseDocResponse = RequirementModel;
+type Completeness = { ok: boolean; missing: string[] };
+type ParseDocResponse = RequirementModel & { completeness?: Completeness };
 type RecommendComponentsResponse = {
   bindings: { infoItemId: string; componentId: string; slotHints?: Record<string, string> }[];
+};
+type OrchestrateRunResponse = {
+  traceId?: string;
+  tracePreview?: unknown;
+  requirement: RequirementModel & { completeness?: Completeness };
+  adjustedRequirement?: RequirementModel & { completeness?: Completeness };
+  bindings?: { infoItemId: string; componentId: string; reason?: string }[];
 };
 type EnrichLibraryResponse = {
   items: {
@@ -2455,7 +2478,6 @@ async function callParseDocument(docText: string): Promise<ParseDocResponse> {
     throw new Error(`解析失败 (${response.status}): ${raw.slice(0, 160)}`);
   }
   const data = JSON.parse(raw) as ParseDocResponse;
-  await persistRequirement({ ...data, updatedAt: Date.now() });
   return data;
 }
 
@@ -2577,6 +2599,32 @@ async function callLayoutPlan(payload: {
     throw new Error('布局方案格式不正确');
   }
   return data.plan;
+}
+
+async function callOrchestrateRun(payload: {
+  docText: string;
+  library: ComponentExample[];
+  screenType?: string;
+}): Promise<OrchestrateRunResponse> {
+  const response = await fetch(`${API_BASE}/api/orchestrate-run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`多 Agent 生成失败 (${response.status}): ${truncate(raw)}`);
+  }
+  return JSON.parse(raw) as OrchestrateRunResponse;
+}
+
+async function callTrace(traceId: string) {
+  const response = await fetch(`${API_BASE}/api/traces/${encodeURIComponent(traceId)}`);
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`Trace 获取失败 (${response.status}): ${truncate(raw)}`);
+  }
+  return JSON.parse(raw);
 }
 
 async function handleLoadExperiment(experimentId: string) {
@@ -2711,6 +2759,93 @@ async function handleSetBackgroundFromSelection() {
   });
 }
 
+function stripCompleteness(model: RequirementModel & { completeness?: Completeness }): RequirementModel {
+  const { completeness: _c, ...rest } = model;
+  return rest;
+}
+
+function applyBindingsToRequirement(model: RequirementModel | null, bindings: { infoItemId: string; componentId: string }[]) {
+  if (!model?.pages?.length || !bindings?.length) return;
+  const map = new Map<string, string>();
+  bindings.forEach((b) => {
+    if (!b.componentId) return;
+    map.set(b.infoItemId, b.componentId);
+  });
+  model.pages.forEach((page) => {
+    const next = page.preferredBindings || [];
+    (page.infoPriorities || []).forEach((info) => {
+      const compId = map.get(info.infoItemId);
+      if (!compId) return;
+      const existing = next.find((b) => b.infoItemId === info.infoItemId);
+      if (existing) existing.componentId = compId;
+      else next.push({ infoItemId: info.infoItemId, componentId: compId });
+    });
+    page.preferredBindings = next;
+  });
+}
+
+async function handleOrchestrateRun(msg: OrchestrateRunMessage) {
+  const docText = (msg.docText || '').trim();
+  if (!docText) {
+    figma.notify('请输入需求文档文本');
+    figma.ui.postMessage({ type: 'trace-error', message: '缺少需求文档' });
+    return;
+  }
+  try {
+    sendStatus('loading', '多 Agent 生成中');
+    const result = await callOrchestrateRun({
+      docText,
+      library: componentLibrary.map(applyComponentDefaults),
+      screenType: msg.screenType
+    });
+    const baseRequirement = result.adjustedRequirement || result.requirement;
+    if (!baseRequirement) {
+      throw new Error('后端未返回需求模型');
+    }
+    const completeness = (result.requirement as any)?.completeness;
+    const sanitized = stripCompleteness(baseRequirement as RequirementModel & { completeness?: Completeness });
+    sanitized.updatedAt = Date.now();
+    await persistRequirement(sanitized);
+    requirementModel = sanitized;
+    if (result.bindings?.length) {
+      applyBindingsToRequirement(requirementModel, result.bindings);
+      await persistRequirement(requirementModel);
+    }
+    lastTraceId = result.traceId || null;
+    sendRequirementToUI();
+    figma.ui.postMessage({
+      type: 'orchestrator-result',
+      traceId: result.traceId,
+      tracePreview: result.tracePreview,
+      missing: completeness?.missing || [],
+      bindings: result.bindings
+    });
+    figma.notify('多 Agent 生成完成');
+    sendStatus('success', '多 Agent 生成完成');
+  } catch (error) {
+    figma.ui.postMessage({ type: 'trace-error', message: getErrorMessage(error) });
+    sendStatus('error', getErrorMessage(error));
+    figma.notify(`多 Agent 生成失败：${getErrorMessage(error)}`);
+  } finally {
+    sendStatus('idle');
+  }
+}
+
+async function handleExportTrace(msg: ExportTraceMessage) {
+  const traceId = msg.traceId || lastTraceId;
+  if (!traceId) {
+    figma.ui.postMessage({ type: 'trace-error', message: '暂无可导出的 Trace' });
+    figma.notify('暂无 Trace 可导出');
+    return;
+  }
+  try {
+    const trace = await callTrace(traceId);
+    figma.ui.postMessage({ type: 'trace-data', traceId, trace });
+  } catch (error) {
+    figma.ui.postMessage({ type: 'trace-error', message: getErrorMessage(error) });
+  }
+}
+
 async function handleParseDocument(docText: string) {
   if (!docText || !docText.trim()) {
     figma.notify('请输入需求文档文本');
@@ -2718,8 +2853,17 @@ async function handleParseDocument(docText: string) {
   }
   try {
     sendStatus('loading', '正在解析文档');
-    const model = await callParseDocument(docText);
+    const result = await callParseDocument(docText);
+    const completeness = (result as any)?.completeness;
+    const sanitized = stripCompleteness(result as RequirementModel & { completeness?: Completeness });
+    await persistRequirement({ ...sanitized, updatedAt: Date.now() });
+    requirementModel = sanitized;
     sendRequirementToUI();
+    if (completeness?.missing?.length) {
+      figma.ui.postMessage({ type: 'extract-warning', missing: completeness.missing });
+    } else {
+      figma.ui.postMessage({ type: 'extract-warning', missing: [] });
+    }
     figma.notify('文档解析完成');
     sendStatus('success');
   } catch (error) {

@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
 
 // Load env from project root .env, then fallback to server/.env if still missing
 dotenv.config();
@@ -28,6 +29,7 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash-latest';
 
 const COMPONENT_LIB_PATH = path.join(__dirname, '..', 'data', 'component_lib.md');
 const LLM_LOG_DIR = path.join(__dirname, 'llm_logs');
+const TRACE_DIR = path.join(__dirname, 'traces');
 
 function ensureLLMLogDir() {
   try {
@@ -38,38 +40,45 @@ function ensureLLMLogDir() {
 }
 
 ensureLLMLogDir();
+function ensureTraceDir() {
+  try {
+    fs.mkdirSync(TRACE_DIR, { recursive: true });
+  } catch (error) {
+    console.error('[trace] create dir failed', error);
+  }
+}
+
+ensureTraceDir();
+
+function summarizeShape(obj) {
+  if (obj === null || obj === undefined) return { type: typeof obj };
+  if (typeof obj === 'string') return { type: 'string', length: obj.length };
+  if (Array.isArray(obj)) return { type: 'array', length: obj.length };
+  if (typeof obj === 'object') return { type: 'object', keys: Object.keys(obj), jsonSize: JSON.stringify(obj).length };
+  return { type: typeof obj };
+}
 
 function logLLMInteraction(name, payload) {
   try {
     const entry = {
       timestamp: new Date().toISOString(),
-      request: payload.request,
-      responseRaw:
-        typeof payload.responseRaw === 'string'
-          ? payload.responseRaw
-          : payload.responseRaw !== undefined
-          ? payload.responseRaw
-          : undefined,
-      parsedPreview: payload.parsed ? JSON.stringify(payload.parsed).slice(0, 2000) : undefined,
+      requestSummary: summarizeShape(payload.request),
+      responseSummary: summarizeShape(payload.responseRaw),
+      parsedPreview: payload.parsed ? JSON.stringify(payload.parsed).slice(0, 600) : undefined,
       error: payload.error ? String(payload.error) : undefined
     };
     const filePath = path.join(LLM_LOG_DIR, `${name}.json`);
     fs.writeFileSync(filePath, JSON.stringify(entry, null, 2), 'utf8');
-
-    if (entry.request) {
-      console.log(`[llm:${name}] request ->`, JSON.stringify(entry.request, null, 2));
-    }
-    if (entry.responseRaw !== undefined) {
-      const preview =
-        typeof entry.responseRaw === 'string'
-          ? entry.responseRaw.slice(0, 2000)
-          : JSON.stringify(entry.responseRaw, null, 2);
-      console.log(`[llm:${name}] response ->`, preview);
-    }
-    if (entry.error) console.log(`[llm:${name}] error ->`, entry.error);
+    console.log(
+      `[llm:${name}] req:${entry.requestSummary.type} size=${entry.requestSummary.jsonSize || entry.requestSummary.length || '-'} | res:${entry.responseSummary.type} size=${entry.responseSummary.jsonSize || entry.responseSummary.length || '-'}${entry.error ? ' | error:' + entry.error : ''}`
+    );
   } catch (err) {
     console.error(`[llm:${name}] log failed`, err);
   }
+}
+
+function logAgent(agent, phase, detail) {
+  console.log(`[agent:${agent}] ${phase} | ${detail}`);
 }
 
 function loadComponentLibFromFile() {
@@ -1864,8 +1873,7 @@ app.post('/api/enrich-library', async (req, res) => {
 
   try {
     const prompt = buildPrompt(items);
-    console.log('[enrich] items:', items.length);
-    console.log('[enrich] prompt sample:', prompt.slice(0, 400));
+    logAgent('enrich', 'request', `items=${items.length}`);
 
     const llmUrl = `${OPENAI_BASE_URL}/chat/completions`;
     const llmBody = {
@@ -1886,24 +1894,24 @@ app.post('/api/enrich-library', async (req, res) => {
 
     const raw = await completion.text();
     if (!completion.ok) {
-      console.error('LLM enrich error', completion.status, raw.slice(0, 500));
+      console.error('LLM enrich error', completion.status);
       logLLMInteraction('enrich-library', {
         request: { url: llmUrl, body: llmBody },
-        responseRaw: raw,
+        responseRaw: { length: raw.length },
         error: `status_${completion.status}`
       });
       return res.status(completion.status).json({ error: 'LLM error', detail: raw });
     }
-    console.log('[enrich] LLM raw:', raw.slice(0, 800));
     const data = JSON.parse(raw);
     const content = data.choices?.[0]?.message?.content;
     if (!content) return res.status(502).json({ error: 'Empty LLM response' });
     const parsed = parseContent(content);
     logLLMInteraction('enrich-library', {
       request: { url: llmUrl, body: llmBody },
-      responseRaw: raw,
+      responseRaw: { length: raw.length },
       parsed
     });
+    logAgent('enrich', 'response', `items=${parsed?.length || 0}`);
     return res.json({ items: parsed });
   } catch (error) {
     console.error('enrich failed', error);
@@ -1913,74 +1921,25 @@ app.post('/api/enrich-library', async (req, res) => {
 
 // -------- PARSE DOC --------
 app.post('/api/parse-doc', async (req, res) => {
-  if (!OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY in .env' });
-
   const docText = req.body?.docText;
   if (!docText || typeof docText !== 'string' || !docText.trim()) {
     return res.status(400).json({ error: 'docText required' });
   }
 
   try {
-    const prompt = buildParsePrompt(docText);
-    console.log('[parse-doc] prompt sample:', prompt.slice(0, 500));
-
-    const llmUrl = `${OPENAI_BASE_URL}/chat/completions`;
-    const llmBody = {
-      model: PARSE_MODEL,
-      temperature: 0.2,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: PARSE_SYSTEM_PROMPT },
-        { role: 'user', content: prompt }
-      ]
-    };
-
-    const completion = await fetch(llmUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
-      body: JSON.stringify(llmBody)
-    });
-
-    const raw = await completion.text();
-    if (!completion.ok) {
-      console.error('parse-doc LLM error', completion.status, raw.slice(0, 500));
-      logLLMInteraction('parse-doc', {
-        request: { url: llmUrl, body: llmBody },
-        responseRaw: raw,
-        error: `status_${completion.status}`
-      });
-      return res.status(completion.status).json({ error: 'LLM error', detail: raw });
-    }
-    console.log('[parse-doc] LLM raw:', raw.slice(0, 800));
-    const data = JSON.parse(raw);
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) return res.status(502).json({ error: 'Empty LLM response' });
-    const parsed = parseContent(content);
-    if (!parsed?.pages) {
-      const fallback = buildFallbackModel(docText);
-      logLLMInteraction('parse-doc', {
-        request: { url: llmUrl, body: llmBody },
-        responseRaw: raw,
-        parsed: fallback
-      });
-      return res.json(fallback);
-    }
-    logLLMInteraction('parse-doc', {
-      request: { url: llmUrl, body: llmBody },
-      responseRaw: raw,
-      parsed
-    });
-    return res.json(parsed);
+    const parsed = await runParseDocumentInternal(docText);
+    const completeness = ensureRequirementCompleteness(parsed);
+    return res.json({ ...parsed, completeness });
   } catch (error) {
     console.error('parse-doc failed', error);
     const fallback = buildFallbackModel(docText);
-    return res.status(200).json(fallback);
+    const completeness = ensureRequirementCompleteness(fallback);
+    return res.status(200).json({ ...fallback, completeness });
   }
 });
 
 // -------- RECOMMEND COMPONENTS --------
 app.post('/api/recommend-components', async (req, res) => {
-  if (!OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY in .env' });
   const infoItems = Array.isArray(req.body?.infoItems) ? req.body.infoItems : [];
   const library = Array.isArray(req.body?.library) ? req.body.library : [];
   if (!infoItems.length || !library.length) {
@@ -1988,59 +1947,56 @@ app.post('/api/recommend-components', async (req, res) => {
   }
 
   try {
-    const prompt = buildRecommendPrompt(infoItems, library);
-    console.log('[recommend] infoItems:', infoItems.length, 'library:', library.length);
-    const llmUrl = `${OPENAI_BASE_URL}/chat/completions`;
-    const llmBody = {
-      model: RECO_MODEL,
-      temperature: 0.4,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: RECO_SYSTEM_PROMPT },
-        { role: 'user', content: prompt }
-      ]
-    };
-    const completion = await fetch(llmUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
-      body: JSON.stringify(llmBody)
+    const stage1 = buildTwoStageCandidates(infoItems, library);
+    const finalSelection = await runFinalSelectionWithLLM(stage1, infoItems);
+    const bindings = infoItems.map((info) => {
+      const chosen = (finalSelection.decisions || []).find((d) => d.infoItemId === info.id);
+      if (chosen?.chosen) {
+        return { infoItemId: info.id, componentId: chosen.chosen, slotHints: {} };
+      }
+      const first = (stage1.find((c) => c.infoItemId === info.id)?.candidates || [])[0];
+      return { infoItemId: info.id, componentId: first?.componentId || '', slotHints: {} };
     });
-
-    const raw = await completion.text();
-    if (!completion.ok) {
-      console.error('recommend LLM error', completion.status, raw.slice(0, 500));
-      logLLMInteraction('recommend-components', {
-        request: { url: llmUrl, body: llmBody },
-        responseRaw: raw,
-        error: `status_${completion.status}`
-      });
-      const fallback = buildRecommendFallback(infoItems, library);
-      return res.status(200).json(fallback);
-    }
-    console.log('[recommend] LLM raw:', raw.slice(0, 800));
-    const data = JSON.parse(raw);
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) {
-      const fallback = buildRecommendFallback(infoItems, library);
-      logLLMInteraction('recommend-components', {
-        request: { url: llmUrl, body: llmBody },
-        responseRaw: raw,
-        parsed: fallback
-      });
-      return res.status(200).json(fallback);
-    }
-    const parsed = parseContent(content);
-    logLLMInteraction('recommend-components', {
-      request: { url: llmUrl, body: llmBody },
-      responseRaw: raw,
-      parsed
+    return res.json({
+      bindings,
+      meta: {
+        stage1CandidateCount: stage1.reduce((acc, c) => acc + c.candidates.length, 0),
+        usedLLM: finalSelection.usedLLM,
+        llmError: finalSelection.error
+      },
+      stage1,
+      stage2: finalSelection
     });
-    return res.json({ bindings: parsed?.bindings || parsed || [] });
   } catch (error) {
     console.error('recommend failed', error);
     const fallback = buildRecommendFallback(infoItems, library);
     return res.status(200).json(fallback);
   }
+});
+
+// -------- ORCHESTRATED MULTI-AGENT RUN --------
+app.post('/api/orchestrate-run', async (req, res) => {
+  const docText = req.body?.docText;
+  const library = Array.isArray(req.body?.library) ? req.body.library : [];
+  const screenType = req.body?.screenType || 'dashboard';
+  if (!docText || typeof docText !== 'string' || !docText.trim()) {
+    return res.status(400).json({ error: 'docText required' });
+  }
+  try {
+    const result = await orchestrateRun({ docText, library, screenType });
+    return res.json(result);
+  } catch (error) {
+    console.error('[orchestrate-run] failed', error);
+    return res.status(500).json({ error: 'orchestrate_failed', message: String(error) });
+  }
+});
+
+app.get('/api/traces/:id', (req, res) => {
+  const { id } = req.params || {};
+  if (!id) return res.status(400).json({ error: 'trace_id_required' });
+  const trace = loadTrace(id);
+  if (!trace) return res.status(404).json({ error: 'trace_not_found' });
+  return res.json(trace);
 });
 
 // -------- EDIT PAGE (UI 自然语言编辑) --------
@@ -2064,9 +2020,7 @@ app.post('/api/edit-page', async (req, res) => {
   const prompt = buildEditOpsUserPrompt(userPrompt, frameSnapshot);
 
   try {
-    console.log('[edit-page] provider:', provider, 'model:', model);
-    console.log('[edit-page] frame snapshot nodes:', countNodes(frameSnapshot));
-    console.log('[edit-page] prompt sample:', userPrompt.slice(0, 400));
+    logAgent('edit-page', 'request', `provider=${provider} model=${model} nodes=${countNodes(frameSnapshot)}`);
 
     if (provider === 'gemini') {
       const geminiModel = req.body?.model || GEMINI_MODEL;
@@ -2082,11 +2036,10 @@ app.post('/api/edit-page', async (req, res) => {
         body: JSON.stringify(llmBody)
       });
       const raw = await completion.text();
-      console.log('[edit-page] gemini raw:', raw.slice(0, 800));
       if (!completion.ok) {
         logLLMInteraction('edit-page-gemini', {
           request: { url, body: llmBody, provider: 'gemini', model: geminiModel },
-          responseRaw: raw,
+          responseRaw: { length: raw.length },
           error: `status_${completion.status}`
         });
         return res.status(completion.status).json({ error: 'LLM error', detail: raw.slice(0, 800) });
@@ -2101,7 +2054,7 @@ app.post('/api/edit-page', async (req, res) => {
       const parsed = parseContent(contentText);
       logLLMInteraction('edit-page-gemini', {
         request: { url, body: llmBody, provider: 'gemini', model: geminiModel },
-        responseRaw: raw,
+        responseRaw: { length: raw.length },
         parsed
       });
       return res.json(parsed);
@@ -2124,11 +2077,10 @@ app.post('/api/edit-page', async (req, res) => {
       body: JSON.stringify(llmBody)
     });
     const raw = await completion.text();
-    console.log('[edit-page] raw:', raw.slice(0, 800));
     if (!completion.ok) {
       logLLMInteraction('edit-page-openai', {
         request: { url: llmUrl, body: llmBody, provider: 'openai', model },
-        responseRaw: raw,
+        responseRaw: { length: raw.length },
         error: `status_${completion.status}`
       });
       return res.status(completion.status).json({ error: 'LLM error', detail: raw.slice(0, 800) });
@@ -2139,9 +2091,10 @@ app.post('/api/edit-page', async (req, res) => {
     const parsed = parseContent(content);
     logLLMInteraction('edit-page-openai', {
       request: { url: llmUrl, body: llmBody, provider: 'openai', model },
-      responseRaw: raw,
+      responseRaw: { length: raw.length },
       parsed
     });
+    logAgent('edit-page', 'response', `ops=${Array.isArray(parsed?.operations) ? parsed.operations.length : 0}`);
     return res.json(parsed);
   } catch (error) {
     console.error('edit-page failed', error);
@@ -2215,7 +2168,7 @@ async function verifyOpenAIKeyOnStartup() {
       return;
     }
     const content = data.choices?.[0]?.message?.content || '';
-    console.log('[startup] LLM healthcheck ok, reply:', String(content).slice(0, 100));
+    console.log('[startup] LLM healthcheck ok, len:', String(content).length);
   } catch (error) {
     console.error('[startup] LLM healthcheck exception', error);
   }
@@ -2388,10 +2341,10 @@ async function buildLayoutPlanWithLLM(page, infoItems, library, screenType, back
     });
     const raw = await completion.text();
     if (!completion.ok) {
-      console.error('[layout-plan] llm error', completion.status, raw.slice(0, 400));
+      console.error('[layout-plan] llm error', completion.status);
       logLLMInteraction('layout-plan', {
         request: { url: llmUrl, body: llmBody },
-        responseRaw: raw,
+        responseRaw: { length: raw.length },
         error: `status_${completion.status}`
       });
       return { plan: stub, usedLLM: false, warning: 'llm_failed' };
@@ -2402,14 +2355,14 @@ async function buildLayoutPlanWithLLM(page, infoItems, library, screenType, back
     if (parsed?.screen && Array.isArray(parsed?.regions)) {
       logLLMInteraction('layout-plan', {
         request: { url: llmUrl, body: llmBody },
-        responseRaw: raw,
+        responseRaw: { length: raw.length },
         parsed
       });
       return { plan: parsed, usedLLM: true };
     }
     logLLMInteraction('layout-plan', {
       request: { url: llmUrl, body: llmBody },
-      responseRaw: raw,
+      responseRaw: { length: raw.length },
       parsed: parsed || null,
       error: 'llm_parse_failed'
     });
@@ -2702,4 +2655,443 @@ function buildRecommendFallback(infoItems, library) {
     return { infoItemId: info.id, componentId: match.id };
   });
   return { bindings };
+}
+
+// -------- ORCHESTRATOR HELPERS --------
+function summarizeLibrary(library = []) {
+  return {
+    count: Array.isArray(library) ? library.length : 0,
+    ids: (library || []).slice(0, 5).map((c) => c.id)
+  };
+}
+
+function ensureRequirementCompleteness(model) {
+  const missing = [];
+  if (!model?.phases?.length) missing.push('phases');
+  if (!model?.roles?.length) missing.push('roles');
+  if (!model?.conditions?.length) missing.push('conditions');
+  if (!model?.infoItems?.length) missing.push('infoItems');
+  if (!model?.pages?.length) missing.push('pages');
+  return { ok: missing.length === 0, missing };
+}
+
+function saveTrace(trace) {
+  const id = trace?.id || randomUUID();
+  const payload = { ...trace, id };
+  const file = path.join(TRACE_DIR, `${id}.json`);
+  try {
+    fs.writeFileSync(file, JSON.stringify(payload, null, 2), 'utf8');
+  } catch (error) {
+    console.error('[trace] save failed', error);
+  }
+  return id;
+}
+
+function loadTrace(id) {
+  if (!id) return null;
+  const file = path.join(TRACE_DIR, `${id}.json`);
+  try {
+    const raw = fs.readFileSync(file, 'utf8');
+    return JSON.parse(raw);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function createSeededRandom(seed) {
+  let value = seed || 1;
+  return () => {
+    value = (value * 9301 + 49297) % 233280;
+    return value / 233280;
+  };
+}
+
+function perturbPriorities(priorities, rand) {
+  const next = priorities.map((p, idx) => {
+    const jitter = Math.floor(rand() * 3) - 1; // -1,0,1
+    const spread = Math.max(1, p.priority + jitter);
+    return { ...p, priority: spread + idx * 0.01 }; // tiny tie-breaker
+  });
+  next.sort((a, b) => a.priority - b.priority);
+  return next.map((p, index) => ({ ...p, priority: index + 1 }));
+}
+
+function computeObjectives(candidate, infoItems, baseline) {
+  const byId = new Map();
+  candidate.forEach((p) => byId.set(p.infoItemId, p.priority));
+  const baseMap = new Map();
+  baseline.forEach((p) => baseMap.set(p.infoItemId, p.priority));
+
+  let overload = 0;
+  let density = 0;
+  let semanticRisk = 0;
+
+  candidate.forEach((p) => {
+    density += p.priority;
+    const info = infoItems.find((i) => i.id === p.infoItemId);
+    const highValue = info?.dataType === 'alert' || info?.semanticTags?.includes('alert');
+    const critical = info?.dataType === 'alert' || info?.dataType === 'trend';
+    if (p.priority <= 3) overload += 0.5;
+    if (p.priority <= 5) overload += 0.2;
+    if (highValue && p.priority > 2) semanticRisk += 2;
+    if (critical && p.priority > 4) semanticRisk += 1;
+    const base = baseMap.get(p.infoItemId);
+    if (typeof base === 'number' && p.priority - base > 2) semanticRisk += 0.5;
+  });
+
+  density = density / Math.max(1, candidate.length);
+  return { density: Number(density.toFixed(2)), overload: Number(overload.toFixed(2)), semanticRisk: Number(semanticRisk.toFixed(2)) };
+}
+
+function nonDominatedSort(population) {
+  const fronts = [[]];
+  population.forEach((p) => {
+    p.dominationCount = 0;
+    p.dominatedSet = [];
+    population.forEach((q) => {
+      if (p === q) return;
+      const dominates =
+        p.objectives.density <= q.objectives.density &&
+        p.objectives.semanticRisk <= q.objectives.semanticRisk &&
+        (p.objectives.density < q.objectives.density ||
+          p.objectives.semanticRisk < q.objectives.semanticRisk);
+      const dominatedBy =
+        q.objectives.density <= p.objectives.density &&
+        q.objectives.semanticRisk <= p.objectives.semanticRisk &&
+        (q.objectives.density < p.objectives.density ||
+          q.objectives.semanticRisk < p.objectives.semanticRisk);
+      if (dominates) p.dominatedSet.push(q);
+      else if (dominatedBy) p.dominationCount += 1;
+    });
+    if (p.dominationCount === 0) {
+      p.rank = 1;
+      fronts[0].push(p);
+    }
+  });
+
+  let i = 0;
+  while (fronts[i]?.length) {
+    const next = [];
+    fronts[i].forEach((p) => {
+      p.dominatedSet.forEach((q) => {
+        q.dominationCount -= 1;
+        if (q.dominationCount === 0) {
+          q.rank = i + 2;
+          next.push(q);
+        }
+      });
+    });
+    if (next.length) fronts.push(next);
+    i += 1;
+  }
+  return fronts.filter((f) => f.length);
+}
+
+function assignCrowdingDistance(front) {
+  if (!front.length) return;
+  ['density', 'semanticRisk'].forEach((key) => {
+    front.sort((a, b) => a.objectives[key] - b.objectives[key]);
+    front[0].crowding = front[front.length - 1].crowding = Infinity;
+    const min = front[0].objectives[key];
+    const max = front[front.length - 1].objectives[key];
+    if (max === min) return;
+    for (let i = 1; i < front.length - 1; i += 1) {
+      const prev = front[i - 1].objectives[key];
+      const next = front[i + 1].objectives[key];
+      const distance = (next - prev) / (max - min);
+      front[i].crowding = (front[i].crowding || 0) + distance;
+    }
+  });
+}
+
+function selectBestCandidate(fronts) {
+  if (!fronts.length) return null;
+  const first = fronts[0];
+  assignCrowdingDistance(first);
+  const sorted = first
+    .slice()
+    .sort((a, b) => {
+      if ((b.crowding || 0) !== (a.crowding || 0)) return (b.crowding || 0) - (a.crowding || 0);
+      if (a.objectives.overload !== b.objectives.overload) return a.objectives.overload - b.objectives.overload;
+      return a.objectives.density - b.objectives.density;
+    });
+  return sorted[0];
+}
+
+function runNsgaForPage(page, infoItems) {
+  const seed = Math.abs(page.id?.length || page.infoPriorities?.length || 7) + 1;
+  const rand = createSeededRandom(seed);
+  const base = Array.isArray(page.infoPriorities) ? page.infoPriorities.slice() : [];
+  const populationSize = Math.max(4, Math.min(10, base.length + 2));
+  let population = [];
+  for (let i = 0; i < populationSize; i += 1) {
+    const mutated = perturbPriorities(base, rand);
+    population.push(mutated);
+  }
+
+  const iterations = [];
+  for (let gen = 1; gen <= 3; gen += 1) {
+    const scored = population.map((candidate, idx) => {
+      const objectives = computeObjectives(candidate, infoItems, base);
+      return {
+        id: `cand-${gen}-${idx + 1}`,
+        candidate,
+        objectives,
+        rank: null,
+        crowding: 0
+      };
+    });
+    const fronts = nonDominatedSort(scored);
+    const best = selectBestCandidate(fronts);
+    iterations.push({
+      round: gen,
+      candidates: scored.map((c) => ({
+        id: c.id,
+        objectives: c.objectives,
+        rank: c.rank,
+        crowding: Number((c.crowding || 0).toFixed(3))
+      })),
+      best: best
+        ? { id: best.id, objectives: best.objectives, rank: best.rank, crowding: best.crowding }
+        : null
+    });
+    const survivors = [];
+    fronts.forEach((front) => {
+      assignCrowdingDistance(front);
+      front
+        .sort((a, b) => {
+          if (a.rank !== b.rank) return a.rank - b.rank;
+          return (b.crowding || 0) - (a.crowding || 0);
+        })
+        .forEach((c) => survivors.push(c));
+    });
+    population = survivors.slice(0, populationSize).map((c) => c.candidate);
+  }
+  const finalScores = population.map((candidate, idx) => {
+    const objectives = computeObjectives(candidate, infoItems, base);
+    return { id: `final-${idx + 1}`, candidate, objectives, rank: 1, crowding: 0 };
+  });
+  const finalFronts = nonDominatedSort(finalScores);
+  const winner = selectBestCandidate(finalFronts) || finalScores[0];
+  return { winner, iterations };
+}
+
+function buildTwoStageCandidates(infoItems, library) {
+  const results = [];
+  infoItems.forEach((info) => {
+    const scored = (library || []).map((comp) => {
+      const dataTypeScore = comp.supportedDataTypes?.includes(info.dataType) ? 3 : 0;
+      const tagOverlap = (info.semanticTags || []).filter((t) => (comp.tags || []).includes(t));
+      const tagScore = tagOverlap.length ? 2 + tagOverlap.length * 0.5 : 0;
+      const densityScore = comp.infoDensityProfile === 'dense' ? 1 : comp.infoDensityProfile === 'normal' ? 0.5 : 0;
+      const priorityScore = comp.priorityAffinity === 'high' ? 1 : 0;
+      const total = dataTypeScore + tagScore + densityScore + priorityScore;
+      const reasons = [];
+      if (dataTypeScore) reasons.push('数据类型匹配');
+      if (tagScore) reasons.push(`语义标签 ${tagOverlap.join('/')}`);
+      if (densityScore) reasons.push('信息密度适配');
+      if (priorityScore) reasons.push('高优先级适配');
+      return { componentId: comp.id, score: Number(total.toFixed(2)), reasons, name: comp.name };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    results.push({ infoItemId: info.id, candidates: scored.slice(0, 5) });
+  });
+  return results;
+}
+
+async function runFinalSelectionWithLLM(candidatesByInfo, infoItems) {
+  if (!OPENAI_API_KEY) {
+    return {
+      decisions: candidatesByInfo.map((c) => ({
+        infoItemId: c.infoItemId,
+        chosen: c.candidates[0]?.componentId || '',
+        reason: c.candidates[0] ? `基于候选分数 ${c.candidates[0].score}` : '无候选'
+      })),
+      usedLLM: false
+    };
+  }
+  const prompt = candidatesByInfo
+    .map((c) => {
+      const info = infoItems.find((i) => i.id === c.infoItemId);
+      const list = c.candidates
+        .map((cand, idx) => `${idx + 1}. ${cand.componentId} (${cand.name || ''}) · 分数:${cand.score} · 理由:${cand.reasons.join(';')}`)
+        .join('\n');
+      return `信息项 ${info?.name || info?.id || c.infoItemId} 候选：\n${list}\n请选择最合适的组件ID，理由简述。`;
+    })
+    .join('\n---\n');
+
+  const llmUrl = `${OPENAI_BASE_URL}/chat/completions`;
+  const llmBody = {
+    model: MODEL,
+    temperature: 0,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: '你是 UI 组件裁决 Agent，根据候选分数与语义，输出 {"decisions":[{"infoItemId":"","chosen":"","reason":""}]}' },
+      { role: 'user', content: prompt }
+    ]
+  };
+  try {
+    const completion = await fetch(llmUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
+      body: JSON.stringify(llmBody)
+    });
+    const raw = await completion.text();
+    if (!completion.ok) {
+      logLLMInteraction('retrieval-final', { request: { url: llmUrl, body: llmBody }, responseRaw: { length: raw.length }, error: `status_${completion.status}` });
+      return {
+        decisions: candidatesByInfo.map((c) => ({
+          infoItemId: c.infoItemId,
+          chosen: c.candidates[0]?.componentId || '',
+          reason: c.candidates[0] ? `基于候选分数 ${c.candidates[0].score}` : '无候选'
+        })),
+        usedLLM: false,
+        error: `status_${completion.status}`
+      };
+    }
+    const data = JSON.parse(raw);
+    const content = data.choices?.[0]?.message?.content || '';
+    const parsed = parseContent(content);
+    const decisions = Array.isArray(parsed?.decisions) ? parsed.decisions : [];
+    return { decisions, usedLLM: true, llmPreview: raw.slice(0, 400) };
+  } catch (error) {
+    console.error('[retrieval-final] llm failed', error);
+    return {
+      decisions: candidatesByInfo.map((c) => ({
+        infoItemId: c.infoItemId,
+        chosen: c.candidates[0]?.componentId || '',
+        reason: c.candidates[0] ? `基于候选分数 ${c.candidates[0].score}` : '无候选'
+      })),
+      usedLLM: false,
+      error: String(error)
+    };
+  }
+}
+
+async function orchestrateRun({ docText, library, screenType }) {
+  logAgent('orchestrator', 'start', `docLen=${docText?.length || 0} lib=${library?.length || 0} screenType=${screenType}`);
+  const trace = {
+    id: randomUUID(),
+    startedAt: new Date().toISOString(),
+    mode: 'multi-agent-nsga',
+    agentOrder: ['extract', 'priority-balance', 'retrieval'],
+    input: {
+      docSnippet: (docText || '').slice(0, 240),
+      library: summarizeLibrary(library)
+    },
+    steps: [],
+    iterations: 0
+  };
+
+  // Extract Agent
+  const extractStart = Date.now();
+  logAgent('extract', 'start', `docLen=${docText?.length || 0}`);
+  const parseResult = await runParseDocumentInternal(docText);
+  const completeness = ensureRequirementCompleteness(parseResult);
+  logAgent('extract', 'done', `phases=${parseResult.phases?.length || 0} roles=${parseResult.roles?.length || 0} conditions=${parseResult.conditions?.length || 0} info=${parseResult.infoItems?.length || 0} pages=${parseResult.pages?.length || 0}`);
+  trace.steps.push({
+    agent: 'extract',
+    durationMs: Date.now() - extractStart,
+    inputSummary: `doc length ${docText?.length || 0}`,
+    outputSummary: `phases:${parseResult.phases?.length || 0}, roles:${parseResult.roles?.length || 0}, conditions:${parseResult.conditions?.length || 0}, info:${parseResult.infoItems?.length || 0}, pages:${parseResult.pages?.length || 0}`,
+    completeness
+  });
+
+  // NSGA-II Priority Balance Agent
+  const adjustStart = Date.now();
+  logAgent('priority-balance', 'start', `pages=${parseResult.pages?.length || 0}`);
+  const adjustedRequirement = { ...parseResult, pages: [] };
+  const iterations = [];
+  (parseResult.pages || []).forEach((page) => {
+    const { winner, iterations: rounds } = runNsgaForPage(page, parseResult.infoItems || []);
+    iterations.push(...rounds);
+    adjustedRequirement.pages.push({
+      ...page,
+      infoPriorities: winner?.candidate || page.infoPriorities || []
+    });
+  });
+  trace.iterations = iterations.length;
+  trace.steps.push({
+    agent: 'priority-balance',
+    durationMs: Date.now() - adjustStart,
+    rounds: iterations.length,
+    candidatesPerRound: iterations.map((r) => ({
+      round: r.round,
+      candidateCount: r.candidates.length,
+      best: r.best
+    }))
+  });
+  logAgent('priority-balance', 'done', `rounds=${iterations.length}`);
+
+  // Retrieval Agent (two-stage)
+  const retrievalStart = Date.now();
+  logAgent('retrieval', 'start', `infoItems=${parseResult.infoItems?.length || 0} library=${library?.length || 0}`);
+  const algoCandidates = buildTwoStageCandidates(parseResult.infoItems || [], library || []);
+  const finalSelection = await runFinalSelectionWithLLM(algoCandidates, parseResult.infoItems || []);
+  const bindings = (finalSelection.decisions || []).map((d) => ({
+    infoItemId: d.infoItemId,
+    componentId: d.chosen,
+    reason: d.reason
+  }));
+  logAgent('retrieval', 'done', `bindings=${bindings.length} llm=${finalSelection.usedLLM ? 'yes' : 'no'}`);
+  trace.steps.push({
+    agent: 'retrieval',
+    durationMs: Date.now() - retrievalStart,
+    stage1Candidates: algoCandidates,
+    stage2: { usedLLM: finalSelection.usedLLM, error: finalSelection.error, llmPreview: finalSelection.llmPreview }
+  });
+
+  const traceId = saveTrace(trace);
+  logAgent('orchestrator', 'done', `trace=${traceId}`);
+  return {
+    traceId,
+    tracePreview: {
+      id: traceId,
+      agentOrder: trace.agentOrder,
+      iterations: trace.iterations,
+      completeness,
+      steps: trace.steps.map((s) => ({ agent: s.agent, summary: s.outputSummary || s.durationMs }))
+    },
+    requirement: { ...parseResult, completeness },
+    adjustedRequirement: { ...adjustedRequirement, completeness },
+    bindings
+  };
+}
+
+async function runParseDocumentInternal(docText) {
+  if (!OPENAI_API_KEY) {
+    return buildFallbackModel(docText);
+  }
+  const prompt = buildParsePrompt(docText);
+  const llmUrl = `${OPENAI_BASE_URL}/chat/completions`;
+  const llmBody = {
+    model: PARSE_MODEL,
+    temperature: 0.2,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: PARSE_SYSTEM_PROMPT },
+      { role: 'user', content: prompt }
+    ]
+  };
+  try {
+    const completion = await fetch(llmUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_API_KEY}` },
+      body: JSON.stringify(llmBody)
+    });
+    const raw = await completion.text();
+    if (!completion.ok) {
+    logLLMInteraction('parse-doc', { request: { url: llmUrl, body: llmBody }, responseRaw: { length: raw.length }, error: `status_${completion.status}` });
+      return buildFallbackModel(docText);
+    }
+    const data = JSON.parse(raw);
+    const content = data.choices?.[0]?.message?.content;
+    const parsed = parseContent(content);
+    if (!parsed?.pages) return buildFallbackModel(docText);
+    logLLMInteraction('parse-doc', { request: { url: llmUrl, body: llmBody }, responseRaw: { length: raw.length }, parsed });
+    return parsed;
+  } catch (error) {
+    console.error('[parse-doc] internal failed', error);
+    return buildFallbackModel(docText);
+  }
 }

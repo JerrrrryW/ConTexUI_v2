@@ -742,7 +742,9 @@
             ></textarea>
             <div class="row" style="margin-top: 6px; align-items: center">
               <button id="parseDoc" class="primary" style="width: auto">解析文档</button>
+              <button id="runOrchestrator" style="width: auto">多 Agent 生成 + Trace</button>
             </div>
+            <div id="extractWarning" class="summary" style="color:#fbbf24;margin-top:4px;"></div>
             <div class="detail-section">
               <h4>解析概览</h4>
               <div class="summary" id="reqStats"></div>
@@ -793,6 +795,19 @@
               <span style="margin-left: 8px">中优先级 ≤ 4 项</span>
             </div>
           </div>
+        </div>
+        <div class="card" style="margin-top: 10px">
+          <div class="section-title">
+            <h3>Trace 导出</h3>
+            <span class="pill-ghost">真实性</span>
+          </div>
+          <div id="traceStatus" class="summary"></div>
+          <div class="row" style="gap: 6px; align-items: center; margin-top: 6px">
+            <button id="exportTrace" style="width: auto">导出最新 Trace</button>
+            <button id="copyTrace" style="width: auto">复制</button>
+            <div id="traceSummary" class="summary"></div>
+          </div>
+          <textarea id="traceOutput" class="small" readonly placeholder="运行后可预览 Trace 片段"></textarea>
         </div>
       </div>
 
@@ -988,7 +1003,9 @@
       const useLibraryEl = document.getElementById('useLibrary');
       const docTextEl = document.getElementById('docText');
       const parseDocBtn = document.getElementById('parseDoc');
+      const runOrchestratorBtn = document.getElementById('runOrchestrator');
       const reqStatsEl = document.getElementById('reqStats');
+      const extractWarningEl = document.getElementById('extractWarning');
       const phaseListEl = document.getElementById('phaseList');
       const roleListEl = document.getElementById('roleList');
       const conditionListEl = document.getElementById('conditionList');
@@ -1041,6 +1058,11 @@
       const openExperimentBtn = document.getElementById('openExperiment');
       const closeExperimentBtn = document.getElementById('closeExperiment');
       const experimentModal = document.getElementById('experimentModal');
+      const traceStatusEl = document.getElementById('traceStatus');
+      const traceSummaryEl = document.getElementById('traceSummary');
+      const exportTraceBtn = document.getElementById('exportTrace');
+      const copyTraceBtn = document.getElementById('copyTrace');
+      const traceOutputEl = document.getElementById('traceOutput');
       let library = [];
       let requirement = null;
       let experiments = [];
@@ -1055,6 +1077,8 @@
       let selectedExperimentId = null;
       let experimentLoading = false;
       let loadedExperimentName = '';
+      let lastTraceId = null;
+      let lastTracePreview = null;
       const DATA_TYPES = ['numeric', 'trend', 'alert', 'state', 'text', 'map', 'list'];
       const SLOT_TYPES = ['label', 'numericValue', 'unit', 'state', 'alert', 'listItem'];
       const INFO_CATEGORIES = ['status', 'metric', 'trend', 'alert', 'navigation', 'context', 'control', 'composite'];
@@ -1701,6 +1725,38 @@
         parent.postMessage({ pluginMessage: { type: 'parse-doc', docText } }, '*');
       };
 
+      if (runOrchestratorBtn) {
+        runOrchestratorBtn.onclick = () => {
+          traceStatusEl.textContent = '多 Agent 运行中…';
+          parent.postMessage(
+            {
+              pluginMessage: {
+                type: 'orchestrate-run',
+                docText: docTextEl.value,
+                screenType: screenTypeEl?.value || 'dashboard'
+              }
+            },
+            '*'
+          );
+        };
+      }
+
+      if (exportTraceBtn) {
+        exportTraceBtn.onclick = () => {
+          traceStatusEl.textContent = '请求 Trace…';
+          parent.postMessage({ pluginMessage: { type: 'export-trace', traceId: lastTraceId || undefined } }, '*');
+        };
+      }
+
+      if (copyTraceBtn) {
+        copyTraceBtn.onclick = () => {
+          if (!traceOutputEl?.value) return;
+          traceOutputEl.select();
+          document.execCommand('copy');
+          traceStatusEl.textContent = '已复制 Trace';
+        };
+      }
+
       if (loadExperimentBtn) {
         loadExperimentBtn.onclick = () => {
           if (!selectedExperimentId || experimentLoading) return;
@@ -2216,6 +2272,44 @@
       window.onmessage = (event) => {
         const msg = event.data.pluginMessage;
         if (!msg) return;
+
+        if (msg.type === 'extract-warning') {
+          if (extractWarningEl) {
+            extractWarningEl.textContent = msg.missing?.length
+              ? `抽取缺失字段：${msg.missing.join(', ')}`
+              : '';
+          }
+          return;
+        }
+
+        if (msg.type === 'orchestrator-result') {
+          lastTraceId = msg.traceId || null;
+          lastTracePreview = msg.tracePreview || null;
+          if (traceStatusEl) {
+            traceStatusEl.textContent = `已完成多 Agent 运行${msg.bindings ? ` · 绑定 ${msg.bindings.length}` : ''}`;
+          }
+          if (traceSummaryEl) {
+            const order = (msg.tracePreview?.agentOrder || []).join(' → ');
+            traceSummaryEl.textContent = `Agent 顺序：${order || 'N/A'} · 迭代 ${msg.tracePreview?.iterations ?? '-'}`;
+          }
+          if (extractWarningEl) {
+            extractWarningEl.textContent = msg.missing?.length
+              ? `抽取缺失字段：${msg.missing.join(', ')}`
+              : '';
+          }
+          return;
+        }
+
+        if (msg.type === 'trace-data') {
+          if (traceOutputEl) traceOutputEl.value = JSON.stringify(msg.trace || {}, null, 2);
+          if (traceStatusEl) traceStatusEl.textContent = `已加载 Trace ${msg.traceId || ''}`;
+          return;
+        }
+
+        if (msg.type === 'trace-error') {
+          if (traceStatusEl) traceStatusEl.textContent = `Trace 失败：${msg.message || ''}`;
+          return;
+        }
 
         if (msg.type === 'experiments-list') {
           experiments = Array.isArray(msg.items) ? msg.items : [];
