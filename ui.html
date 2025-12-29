@@ -878,8 +878,10 @@
                   <div class="row" style="gap: 6px">
                     <button id="generatePlanBtn" style="width: auto">生成布局草案</button>
                     <button id="applyPlanBtn" class="primary" style="width: auto">生成到画布</button>
+                    <button id="closedLoopBtn" class="primary" style="width: auto">闭环生成（评审+修正）</button>
                   </div>
                   <div id="layoutPlanStatus" class="summary"></div>
+                  <div id="loopStatus" class="summary"></div>
                 </div>
               </div>
               <div class="row" style="gap: 8px; align-items: center; margin-top: 6px">
@@ -899,6 +901,24 @@
               <button id="generatePages" class="primary" style="margin-top: 8px; width: 100%">生成所选页面</button>
               <div id="templatePreview" class="preview-box"></div>
               <div class="summary">无组件绑定时将使用占位组件</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="section-title">
+              <h3>评审与修正摘要</h3>
+              <span class="pill-ghost">闭环</span>
+            </div>
+            <div id="reviewSummaryBox" class="summary">尚未执行闭环生成</div>
+            <div class="detail-section">
+              <h4>问题摘要</h4>
+              <div id="issueSummary" class="summary"></div>
+              <div id="issueList" class="priority-list"></div>
+            </div>
+            <div class="detail-section">
+              <h4>修正变更</h4>
+              <div id="changeLogList" class="priority-list"></div>
+              <div id="metricDelta" class="summary"></div>
             </div>
           </div>
 
@@ -1025,6 +1045,7 @@
       const layoutPreviewEl = document.getElementById('layoutPreview');
       const generatePlanBtn = document.getElementById('generatePlanBtn');
       const applyPlanBtn = document.getElementById('applyPlanBtn');
+      const closedLoopBtn = document.getElementById('closedLoopBtn');
       const exportWrap = document.getElementById('exportWrap');
       const exportText = document.getElementById('exportText');
       const copyExportBtn = document.getElementById('copyExport');
@@ -1063,6 +1084,12 @@
       const exportTraceBtn = document.getElementById('exportTrace');
       const copyTraceBtn = document.getElementById('copyTrace');
       const traceOutputEl = document.getElementById('traceOutput');
+      const loopStatusEl = document.getElementById('loopStatus');
+      const reviewSummaryBox = document.getElementById('reviewSummaryBox');
+      const issueSummaryEl = document.getElementById('issueSummary');
+      const issueListEl = document.getElementById('issueList');
+      const changeLogListEl = document.getElementById('changeLogList');
+      const metricDeltaEl = document.getElementById('metricDelta');
       let library = [];
       let requirement = null;
       let experiments = [];
@@ -1079,6 +1106,7 @@
       let loadedExperimentName = '';
       let lastTraceId = null;
       let lastTracePreview = null;
+      let lastLoopMetrics = [];
       const DATA_TYPES = ['numeric', 'trend', 'alert', 'state', 'text', 'map', 'list'];
       const SLOT_TYPES = ['label', 'numericValue', 'unit', 'state', 'alert', 'listItem'];
       const INFO_CATEGORIES = ['status', 'metric', 'trend', 'alert', 'navigation', 'context', 'control', 'composite'];
@@ -1699,6 +1727,28 @@
         };
       }
 
+      if (closedLoopBtn) {
+        closedLoopBtn.onclick = () => {
+          const pageIds = Array.from(selectedPageIds);
+          if (!pageIds.length) {
+            layoutPlanStatusEl.textContent = '请先选择页面';
+            return;
+          }
+          loopStatusEl.textContent = '闭环生成中…';
+          parent.postMessage(
+            {
+              pluginMessage: {
+                type: 'layout-closed-loop',
+                pageIds,
+                screenType: screenTypeEl?.value || 'dashboard',
+                backgroundNodeId
+              }
+            },
+            '*'
+          );
+        };
+      }
+
 
       if (applyPlanBtn) {
         applyPlanBtn.onclick = () => {
@@ -2269,6 +2319,58 @@
       updateLayoutHint();
       if (templateSelect) renderTemplatePreview(templateSelect.value || 'two-col');
 
+      const renderLoopPanels = (payload) => {
+        if (loopStatusEl) loopStatusEl.textContent = payload?.statusText || '';
+        if (reviewSummaryBox) {
+          const allIssues = (payload.reviewSummary || []).reduce(
+            (acc, item) => acc + (item.summary?.counts?.semantic || 0) + (item.summary?.counts?.usability || 0) + (item.summary?.counts?.consistency || 0) + (item.summary?.counts?.ergonomics || 0),
+            0
+          );
+          reviewSummaryBox.textContent = payload.reviewSummary?.length
+            ? `发现问题 ${allIssues} 条，已修正一次`
+            : '暂无评审结果';
+        }
+        if (issueSummaryEl) {
+          const totals = { semantic: 0, usability: 0, consistency: 0, ergonomics: 0 };
+          (payload.reviewSummary || []).forEach((p) => {
+            const c = p.summary?.counts || {};
+            totals.semantic += c.semantic || 0;
+            totals.usability += c.usability || 0;
+            totals.consistency += c.consistency || 0;
+            totals.ergonomics += c.ergonomics || 0;
+          });
+          issueSummaryEl.textContent = `语义 ${totals.semantic} · 可用性 ${totals.usability} · 一致性 ${totals.consistency} · 工效学 ${totals.ergonomics}`;
+        }
+        if (issueListEl) {
+          issueListEl.innerHTML = '';
+          (payload.reviewSummary || []).forEach((p) => {
+            (p.issues || []).slice(0, 5).forEach((issue) => {
+              const row = document.createElement('div');
+              row.className = 'priority-row-3';
+              row.textContent = `${issue.type || ''} · ${issue.message || ''}`;
+              issueListEl.appendChild(row);
+            });
+          });
+          if (!issueListEl.innerHTML) issueListEl.textContent = '暂无问题';
+        }
+        if (changeLogListEl) {
+          changeLogListEl.innerHTML = '';
+          (payload.changeLog || []).forEach((log) => {
+            const row = document.createElement('div');
+            row.className = 'priority-row-3';
+            row.textContent = `${log.pageId || ''} · ${log.detail || ''}`;
+            changeLogListEl.appendChild(row);
+          });
+          if (!changeLogListEl.innerHTML) changeLogListEl.textContent = '暂无变更';
+        }
+        if (metricDeltaEl) {
+          const lines = (payload.metrics || []).map((m) => {
+            return `${m.pageId}: crowding ${m.before?.regionCrowding}→${m.after?.regionCrowding} · overload ${m.before?.overloadCount}→${m.after?.overloadCount} · mismatch ${m.before?.mismatchCount}→${m.after?.mismatchCount}`;
+          });
+          metricDeltaEl.textContent = lines.join(' | ') || '';
+        }
+      };
+
       window.onmessage = (event) => {
         const msg = event.data.pluginMessage;
         if (!msg) return;
@@ -2308,6 +2410,28 @@
 
         if (msg.type === 'trace-error') {
           if (traceStatusEl) traceStatusEl.textContent = `Trace 失败：${msg.message || ''}`;
+          return;
+        }
+
+        if (msg.type === 'layout-loop-status') {
+          if (loopStatusEl) {
+            if (msg.status === 'running') {
+              if (msg.phase === 'initial') loopStatusEl.textContent = '初次生成完成';
+              else if (msg.phase === 'review') loopStatusEl.textContent = '一致性评审进行中';
+              else if (msg.phase === 'repair') loopStatusEl.textContent = '正在按建议修正';
+              else loopStatusEl.textContent = '评审与修正进行中…';
+            } else if (msg.status === 'done') {
+              loopStatusEl.textContent = '最终生成完成';
+            } else if (msg.status === 'error') {
+              loopStatusEl.textContent = `闭环失败：${msg.message || ''}`;
+            }
+          }
+          return;
+        }
+
+        if (msg.type === 'layout-loop-result') {
+          renderLoopPanels(msg);
+          lastTraceId = msg.traceId || lastTraceId;
           return;
         }
 

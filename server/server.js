@@ -2127,6 +2127,94 @@ app.post('/api/layout-plan', async (req, res) => {
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
+// -------- LAYOUT CLOSED-LOOP (评审+修正) --------
+app.post('/api/layout-closed-loop', async (req, res) => {
+  try {
+    const requirement = req.body?.requirement;
+    const library = Array.isArray(req.body?.library) ? req.body.library : [];
+    const pageIds = Array.isArray(req.body?.pageIds) ? req.body.pageIds : [];
+    const background = req.body?.background || {};
+    const screenType = req.body?.screenType || 'dashboard';
+    if (!requirement?.pages?.length || !requirement?.infoItems?.length) {
+      return res.status(400).json({ error: 'requirement_required', message: '缺少需求模型' });
+    }
+    if (!library.length) {
+      return res.status(400).json({ error: 'library_required', message: '缺少组件库' });
+    }
+    const targets = pageIds.length
+      ? requirement.pages.filter((p) => pageIds.includes(p.id))
+      : requirement.pages.slice(0, 1);
+    if (!targets.length) {
+      return res.status(400).json({ error: 'pages_required', message: '未找到页面' });
+    }
+
+    const trace = {
+      id: randomUUID(),
+      mode: 'layout-closed-loop',
+      startedAt: new Date().toISOString(),
+      agentOrder: ['initial-mapping', 'initial-layout', 'review', 'repair'],
+      steps: [],
+      pages: []
+    };
+
+    const plans = [];
+    const finalPlans = [];
+    const changeLogAll = [];
+    const metricsBeforeAfter = [];
+    const reviewSummary = [];
+
+    for (const page of targets) {
+      logAgent('layout-loop', 'initial-layout', `page=${page.id}`);
+      const initialPlan = await buildLayoutPlanWithLLM(page, requirement.infoItems, library, screenType, background);
+      const metricsBefore = computeLayoutMetrics(initialPlan.plan, page, requirement.infoItems, library);
+      plans.push({ pageId: page.id, plan: initialPlan.plan });
+
+      const review = runLayoutReview(initialPlan.plan, page, requirement, library);
+      logAgent('layout-loop', 'review', `page=${page.id} issues=${review.issues.length}`);
+
+      const repaired = applyLayoutRepair(initialPlan.plan, page, review, requirement, library);
+      const metricsAfter = computeLayoutMetrics(repaired.plan, page, requirement.infoItems, library);
+      finalPlans.push({ pageId: page.id, plan: repaired.plan });
+      changeLogAll.push(...repaired.changeLog);
+      metricsBeforeAfter.push({ pageId: page.id, before: metricsBefore, after: metricsAfter });
+      reviewSummary.push({ pageId: page.id, summary: review.summary, issues: review.issues.slice(0, 5) });
+    }
+
+    trace.steps.push({
+      agent: 'initial-mapping',
+      summary: '绑定来自 requirement.preferredBindings 只读',
+      pages: targets.map((p) => ({ id: p.id, bindings: summarizeBindings(p) }))
+    });
+    trace.steps.push({
+      agent: 'initial-layout',
+      summary: plans.map((p) => ({ pageId: p.pageId, plan: summarizePlan(p.plan) }))
+    });
+    trace.steps.push({
+      agent: 'review',
+      summary: reviewSummary
+    });
+    trace.steps.push({
+      agent: 'repair',
+      changeLog: changeLogAll,
+      metrics: metricsBeforeAfter
+    });
+    const traceId = saveTrace(trace);
+
+    logAgent('layout-loop', 'done', `pages=${targets.length} trace=${traceId}`);
+    return res.json({
+      traceId,
+      initialPlans: plans,
+      finalPlans,
+      changeLog: changeLogAll,
+      reviewSummary,
+      metrics: metricsBeforeAfter
+    });
+  } catch (error) {
+    console.error('[layout-closed-loop] failed', error);
+    return res.status(500).json({ error: 'layout_closed_loop_failed', message: '闭环生成失败' });
+  }
+});
+
 app.listen(PORT, HOST, () => {
   console.log(`enrich-library server listening on http://${HOST}:${PORT}`);
   verifyOpenAIKeyOnStartup();
@@ -2876,6 +2964,55 @@ function runNsgaForPage(page, infoItems) {
   return { winner, iterations };
 }
 
+function computeLayoutMetrics(plan, page, infoItems, library) {
+  const regionCrowding = Math.max(
+    0,
+    ...(plan.regions || []).map((r) => (Array.isArray(r.items) ? r.items.length : 0))
+  );
+  const infoMap = new Map();
+  (infoItems || []).forEach((i) => infoMap.set(i.id, i));
+  const priorityMap = new Map();
+  (page.infoPriorities || []).forEach((p) => priorityMap.set(p.infoItemId, p.priority));
+  const libraryMap = new Map();
+  (library || []).forEach((c) => libraryMap.set(c.id, c));
+  let overloadCount = 0;
+  let mismatchCount = 0;
+  (plan.regions || []).forEach((region) => {
+    (region.items || []).forEach((item) => {
+      const priority = priorityMap.get(item.infoItemId) || 99;
+      if (priority <= 3 && region.role !== 'hero' && region.role !== 'summary') overloadCount += 1;
+      const info = infoMap.get(item.infoItemId);
+      const comp = item.componentId ? libraryMap.get(item.componentId) : null;
+      if (info?.dataType === 'alert' && region.role === 'sidebar') mismatchCount += 1;
+      if (!item.componentId) mismatchCount += 1;
+      if (info?.dataType && comp?.supportedDataTypes && !comp.supportedDataTypes.includes(info.dataType)) {
+        mismatchCount += 1;
+      }
+    });
+  });
+  return {
+    regionCrowding,
+    overloadCount,
+    mismatchCount
+  };
+}
+
+function summarizePlan(plan) {
+  return {
+    regionCount: (plan.regions || []).length,
+    items: (plan.regions || []).reduce((acc, r) => acc + (r.items || []).length, 0),
+    hero: (plan.regions || []).find((r) => r.role === 'hero')?.items?.length || 0
+  };
+}
+
+function summarizeBindings(page) {
+  const bindings = page.preferredBindings || [];
+  return bindings.map((b) => ({
+    infoItemId: b.infoItemId,
+    componentId: b.componentId || null
+  }));
+}
+
 function buildTwoStageCandidates(infoItems, library) {
   const results = [];
   infoItems.forEach((info) => {
@@ -2966,6 +3103,197 @@ async function runFinalSelectionWithLLM(candidatesByInfo, infoItems) {
       error: String(error)
     };
   }
+}
+
+function runLayoutReview(plan, page, requirement, library) {
+  const infoMap = new Map();
+  (requirement.infoItems || []).forEach((i) => infoMap.set(i.id, i));
+  const priorityMap = new Map();
+  (page.infoPriorities || []).forEach((p) => priorityMap.set(p.infoItemId, p.priority));
+  const libraryMap = new Map();
+  (library || []).forEach((c) => libraryMap.set(c.id, c));
+
+  const issues = [];
+  (plan.regions || []).forEach((region) => {
+    const items = region.items || [];
+    if (items.length > 6) {
+      issues.push({
+        type: 'usability',
+        severity: 'medium',
+        message: `区域 ${region.name || region.id} 过于拥挤（${items.length} 项）`,
+        suggestion: { type: 'reflow-region', regionId: region.id }
+      });
+    }
+    items.forEach((item) => {
+      const info = infoMap.get(item.infoItemId);
+      const comp = item.componentId ? libraryMap.get(item.componentId) : null;
+      const priority = priorityMap.get(item.infoItemId) || 99;
+      if (priority <= 3 && region.role !== 'hero' && region.role !== 'summary') {
+        issues.push({
+          type: 'semantic',
+          severity: 'high',
+          infoItemId: item.infoItemId,
+          regionId: region.id,
+          message: `高优先级信息 ${info?.name || item.infoItemId} 未突出展示`,
+          suggestion: { type: 'promote', infoItemId: item.infoItemId }
+        });
+      }
+      if (!item.componentId) {
+        issues.push({
+          type: 'ergonomics',
+          severity: 'medium',
+          infoItemId: item.infoItemId,
+          message: `信息 ${info?.name || item.infoItemId} 缺少组件绑定`,
+          suggestion: { type: 'replace-component', infoItemId: item.infoItemId }
+        });
+      } else if (comp && info?.dataType && comp.supportedDataTypes && !comp.supportedDataTypes.includes(info.dataType)) {
+        issues.push({
+          type: 'ergonomics',
+          severity: 'medium',
+          infoItemId: item.infoItemId,
+          componentId: item.componentId,
+          message: `组件 ${comp.name} 与数据类型 ${info.dataType} 不匹配`,
+          suggestion: { type: 'replace-component', infoItemId: item.infoItemId }
+        });
+      }
+    });
+  });
+
+  // simple cross-page consistency: keep first region role for same infoId
+  const consistency = [];
+  (requirement.pages || []).forEach((p) => {
+    if (p.id === page.id) return;
+    (p.infoPriorities || []).forEach((info) => {
+      const existsInPage = (page.infoPriorities || []).find((x) => x.infoItemId === info.infoItemId);
+      if (existsInPage) consistency.push(info.infoItemId);
+    });
+  });
+  if (consistency.length) {
+    issues.push({
+      type: 'consistency',
+      severity: 'low',
+      message: '存在跨页面共享的信息项，请保持位置一致',
+      suggestion: { type: 'anchor', infoItemIds: Array.from(new Set(consistency)) }
+    });
+  }
+
+  const summary = {
+    counts: {
+      semantic: issues.filter((i) => i.type === 'semantic').length,
+      usability: issues.filter((i) => i.type === 'usability').length,
+      consistency: issues.filter((i) => i.type === 'consistency').length,
+      ergonomics: issues.filter((i) => i.type === 'ergonomics').length
+    },
+    topIssues: issues.slice(0, 5)
+  };
+  return { issues, summary };
+}
+
+function applyLayoutRepair(plan, page, review, requirement, library) {
+  const infoMap = new Map();
+  (requirement.infoItems || []).forEach((i) => infoMap.set(i.id, i));
+  const priorityMap = new Map();
+  (page.infoPriorities || []).forEach((p) => priorityMap.set(p.infoItemId, p.priority));
+  const libraryMap = new Map();
+  (library || []).forEach((c) => libraryMap.set(c.id, c));
+
+  const changeLog = [];
+  const clone = JSON.parse(JSON.stringify(plan));
+  const regionById = new Map();
+  (clone.regions || []).forEach((r) => regionById.set(r.id, r));
+
+  const promote = (infoItemId) => {
+    const currentRegion = (clone.regions || []).find((r) => (r.items || []).some((it) => it.infoItemId === infoItemId));
+    const hero =
+      (clone.regions || []).find((r) => r.role === 'hero') ||
+      (clone.regions || []).find((r) => r.role === 'summary') ||
+      clone.regions?.[0];
+    if (!hero) return;
+    if (currentRegion && currentRegion.id === hero.id) return;
+    if (currentRegion) {
+      currentRegion.items = (currentRegion.items || []).filter((it) => it.infoItemId !== infoItemId);
+    }
+    hero.items = hero.items || [];
+    hero.items.unshift({ infoItemId, componentId: null, slotBindings: [] });
+    changeLog.push({ pageId: page.id, type: 'move', detail: `信息 ${infoItemId} 提升到 ${hero.name || hero.id}` });
+  };
+
+  const replaceComponent = (infoItemId) => {
+    const region = (clone.regions || []).find((r) => (r.items || []).some((it) => it.infoItemId === infoItemId));
+    if (!region) return;
+    const item = (region.items || []).find((it) => it.infoItemId === infoItemId);
+    const candidates = buildTwoStageCandidates([infoMap.get(infoItemId) || { id: infoItemId }], library);
+    const best = candidates[0]?.candidates?.find((c) => c.componentId !== item.componentId);
+    if (best) {
+      const from = item.componentId;
+      item.componentId = best.componentId;
+      changeLog.push({ pageId: page.id, type: 'replace', detail: `${infoItemId}: ${from || '空'} → ${best.componentId}` });
+    }
+  };
+
+  const reflowRegion = (regionId) => {
+    const region = regionById.get(regionId);
+    if (!region || !(region.items || []).length) return;
+    const half = Math.ceil(region.items.length / 2);
+    const newRegion = {
+      id: `${region.id}-split`,
+      name: `${region.name || '区域'}-调整`,
+      role: region.role || 'summary',
+      x: Math.min(0.9, region.x + region.width * 0.5),
+      y: region.y,
+      width: Math.max(0.2, region.width * 0.5),
+      height: region.height,
+      layout: region.layout,
+      items: region.items.splice(half)
+    };
+    clone.regions.push(newRegion);
+    changeLog.push({ pageId: page.id, type: 'reflow', detail: `${region.name || region.id} 拆分为两块` });
+  };
+
+  const anchorPositions = new Map();
+  const applyAnchor = (infoItemIds) => {
+    (clone.regions || []).forEach((region) => {
+      (region.items || []).forEach((item) => {
+        if (!infoItemIds.includes(item.infoItemId)) return;
+        if (!anchorPositions.has(item.infoItemId)) {
+          anchorPositions.set(item.infoItemId, region.role || region.id);
+        } else {
+          const targetRole = anchorPositions.get(item.infoItemId);
+          if (region.role !== targetRole) {
+            const targetRegion =
+              (clone.regions || []).find((r) => r.role === targetRole) || regionById.get(region.id);
+            if (targetRegion && targetRegion.id !== region.id) {
+              region.items = (region.items || []).filter((it) => it.infoItemId !== item.infoItemId);
+              targetRegion.items = targetRegion.items || [];
+              targetRegion.items.push(item);
+              changeLog.push({
+                pageId: page.id,
+                type: 'anchor',
+                detail: `${item.infoItemId} 位置对齐到 ${targetRole}`
+              });
+            }
+          }
+        }
+      });
+    });
+  };
+
+  const applied = new Set();
+  (review.issues || []).forEach((issue) => {
+    if (applied.has(issue)) return;
+    applied.add(issue);
+    if (issue.suggestion?.type === 'promote' && issue.suggestion.infoItemId) {
+      promote(issue.suggestion.infoItemId);
+    } else if (issue.suggestion?.type === 'replace-component' && issue.suggestion.infoItemId) {
+      replaceComponent(issue.suggestion.infoItemId);
+    } else if (issue.suggestion?.type === 'reflow-region' && issue.suggestion.regionId) {
+      reflowRegion(issue.suggestion.regionId);
+    } else if (issue.suggestion?.type === 'anchor' && Array.isArray(issue.suggestion.infoItemIds)) {
+      applyAnchor(issue.suggestion.infoItemIds);
+    }
+  });
+
+  return { plan: clone, changeLog };
 }
 
 async function orchestrateRun({ docText, library, screenType }) {

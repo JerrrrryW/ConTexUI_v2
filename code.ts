@@ -169,6 +169,7 @@ type GenerateLayoutPlanMessage = {
 };
 type ApplyLayoutPlanMessage = { type: 'apply-layout-plan'; pageIds?: string[] };
 type SetBackgroundFromSelectionMessage = { type: 'set-background-from-selection' };
+type LayoutClosedLoopMessage = { type: 'layout-closed-loop'; pageIds?: string[]; screenType?: string; backgroundNodeId?: string };
 type PluginMessage =
   | GenerateDesignMessage
   | GeneratePagesMessage
@@ -179,6 +180,7 @@ type PluginMessage =
   | RequestRequirementMessage
   | OrchestrateRunMessage
   | ExportTraceMessage
+  | LayoutClosedLoopMessage
   | UpdateComponentMetaMessage
   | RequestSlotsMessage
   | SaveSlotsMessage
@@ -494,6 +496,11 @@ figma.ui.onmessage = async (msg: PluginMessage) => {
 
   if (msg.type === 'export-trace') {
     await handleExportTrace(msg);
+    return;
+  }
+
+  if (msg.type === 'layout-closed-loop') {
+    await handleLayoutClosedLoop(msg);
     return;
   }
 
@@ -2425,6 +2432,14 @@ type OrchestrateRunResponse = {
   adjustedRequirement?: RequirementModel & { completeness?: Completeness };
   bindings?: { infoItemId: string; componentId: string; reason?: string }[];
 };
+type LayoutClosedLoopResponse = {
+  traceId?: string;
+  initialPlans: { pageId: string; plan: LayoutPlan }[];
+  finalPlans: { pageId: string; plan: LayoutPlan }[];
+  changeLog: { pageId: string; type: string; detail: string }[];
+  reviewSummary: { pageId: string; summary: { counts: Record<string, number>; topIssues: any[] }; issues: any[] }[];
+  metrics: { pageId: string; before: Record<string, number>; after: Record<string, number> }[];
+};
 type EnrichLibraryResponse = {
   items: {
     id: string;
@@ -2601,6 +2616,25 @@ async function callLayoutPlan(payload: {
   return data.plan;
 }
 
+async function callLayoutClosedLoop(payload: {
+  requirement: RequirementModel;
+  library: ComponentExample[];
+  pageIds: string[];
+  screenType?: string;
+  background?: { nodeId?: string | null };
+}): Promise<LayoutClosedLoopResponse> {
+  const response = await fetch(`${API_BASE}/api/layout-closed-loop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`闭环生成失败 (${response.status}): ${truncate(raw)}`);
+  }
+  return JSON.parse(raw) as LayoutClosedLoopResponse;
+}
+
 async function callOrchestrateRun(payload: {
   docText: string;
   library: ComponentExample[];
@@ -2757,6 +2791,52 @@ async function handleSetBackgroundFromSelection() {
     nodeId: node.id,
     name: node.name || '背景节点'
   });
+}
+
+async function handleLayoutClosedLoop(msg: LayoutClosedLoopMessage) {
+  if (!requirementModel) {
+    figma.ui.postMessage({ type: 'layout-loop-status', status: 'error', message: '请先解析需求' });
+    return;
+  }
+  const targets =
+    Array.isArray(msg.pageIds) && msg.pageIds.length
+      ? requirementModel.pages.filter((p) => msg.pageIds?.includes(p.id))
+      : requirementModel.pages.slice(0, 1);
+  if (!targets.length) {
+    figma.ui.postMessage({ type: 'layout-loop-status', status: 'error', message: '未找到页面' });
+    return;
+  }
+  try {
+    figma.ui.postMessage({ type: 'layout-loop-status', status: 'running', phase: 'initial' });
+    const result = await callLayoutClosedLoop({
+      requirement: requirementModel,
+      library: componentLibrary.map(applyComponentDefaults),
+      pageIds: targets.map((p) => p.id),
+      screenType: msg.screenType,
+      background: { nodeId: msg.backgroundNodeId || lastBackgroundNodeId }
+    });
+    figma.ui.postMessage({ type: 'layout-loop-status', status: 'running', phase: 'review' });
+    figma.ui.postMessage({ type: 'layout-loop-status', status: 'running', phase: 'repair' });
+    if (result.finalPlans?.length) {
+      lastLayoutPlans = {};
+      result.finalPlans.forEach((p) => {
+        lastLayoutPlans[p.pageId] = p.plan;
+      });
+      figma.ui.postMessage({ type: 'layout-plan', plans: result.finalPlans });
+    }
+    figma.ui.postMessage({
+      type: 'layout-loop-result',
+      traceId: result.traceId,
+      changeLog: result.changeLog || [],
+      reviewSummary: result.reviewSummary || [],
+      metrics: result.metrics || []
+    });
+    figma.ui.postMessage({ type: 'layout-loop-status', status: 'done', phase: 'final' });
+    sendStatus('success', '评审与修正完成');
+  } catch (error) {
+    figma.ui.postMessage({ type: 'layout-loop-status', status: 'error', message: getErrorMessage(error) });
+    sendStatus('error', getErrorMessage(error));
+  }
 }
 
 function stripCompleteness(model: RequirementModel & { completeness?: Completeness }): RequirementModel {
