@@ -486,6 +486,61 @@
         font-size: 11px;
         color: var(--text);
       }
+      .metric-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 4px;
+      }
+      .metric-row:last-child {
+        margin-bottom: 0;
+      }
+      .metric-name {
+        font-weight: 600;
+        color: var(--text);
+      }
+      .metric-value {
+        color: var(--accent-weak);
+      }
+      .metric-meaning {
+        font-size: 10px;
+        color: var(--muted);
+      }
+      .candidate-section {
+        margin-top: 6px;
+        padding: 6px;
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius-sm);
+        background: #151821;
+      }
+      .candidate-table {
+        display: grid;
+        gap: 6px;
+        margin-top: 6px;
+      }
+      .candidate-row {
+        display: grid;
+        grid-template-columns: 140px repeat(5, 1fr);
+        gap: 6px;
+        align-items: center;
+        font-size: 11px;
+        padding: 4px 6px;
+        border: 1px solid var(--panel-border);
+        border-radius: 6px;
+        background: #131621;
+      }
+      .candidate-row.header {
+        font-weight: 600;
+        background: #1b1f2a;
+      }
+      .candidate-row.winner {
+        border-color: var(--accent);
+      }
+      .candidate-note {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 4px;
+      }
       .exp-list {
         display: grid;
         gap: 6px;
@@ -809,6 +864,14 @@
           </div>
           <textarea id="traceOutput" class="small" readonly placeholder="运行后可预览 Trace 片段"></textarea>
         </div>
+        <div class="card" style="margin-top: 10px">
+          <div class="section-title">
+            <h3>候选方案对比</h3>
+            <span class="pill-ghost">多目标权衡</span>
+          </div>
+          <div id="candidateSummary" class="summary"></div>
+          <div id="candidateCompare"></div>
+        </div>
       </div>
 
       <div id="layoutTab" class="tab-panel">
@@ -1084,6 +1147,8 @@
       const exportTraceBtn = document.getElementById('exportTrace');
       const copyTraceBtn = document.getElementById('copyTrace');
       const traceOutputEl = document.getElementById('traceOutput');
+      const candidateSummaryEl = document.getElementById('candidateSummary');
+      const candidateCompareEl = document.getElementById('candidateCompare');
       const loopStatusEl = document.getElementById('loopStatus');
       const reviewSummaryBox = document.getElementById('reviewSummaryBox');
       const issueSummaryEl = document.getElementById('issueSummary');
@@ -1142,6 +1207,64 @@
         badge.className = 'badge';
         badge.textContent = `${label}:${value || '未设定'}`;
         return badge;
+      };
+
+      const ERGO_META = [
+        {
+          key: 'vVis',
+          name: 'v_vis',
+          label: '视觉拥挤度',
+          meaning: 'Feature Congestion，越高越复杂'
+        },
+        {
+          key: 'vInt',
+          name: 'v_int',
+          label: '交互复杂度',
+          meaning: '基于可读性/交互负担估算，越高越复杂'
+        },
+        {
+          key: 'cap',
+          name: 'cap',
+          label: '承载能力',
+          meaning: '组件可承载信息量估计，越高越能装'
+        }
+      ];
+
+      const formatMetricValue = (value) => {
+        if (typeof value !== 'number' || Number.isNaN(value)) return '-';
+        return value.toFixed(2);
+      };
+
+      const metricTier = (value) => {
+        if (typeof value !== 'number') return '未知';
+        if (value >= 0.66) return '高';
+        if (value >= 0.33) return '中';
+        return '低';
+      };
+
+      const renderErgonomics = (item) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'readonly-box';
+        const metrics = item?.ergonomics || {};
+        ERGO_META.forEach((meta) => {
+          const value = metrics[meta.key];
+          const row = document.createElement('div');
+          row.className = 'metric-row';
+          const name = document.createElement('div');
+          name.className = 'metric-name';
+          name.textContent = `${meta.name} ${meta.label}`;
+          const valueBox = document.createElement('div');
+          valueBox.className = 'metric-value';
+          valueBox.textContent = `${formatMetricValue(value)} · ${metricTier(value)}`;
+          row.appendChild(name);
+          row.appendChild(valueBox);
+          const meaning = document.createElement('div');
+          meaning.className = 'metric-meaning';
+          meaning.textContent = meta.meaning;
+          wrap.appendChild(row);
+          wrap.appendChild(meaning);
+        });
+        return wrap;
       };
 
       const setLoading = (isLoading) => {
@@ -1252,6 +1375,74 @@
             .join(' · ')}`;
           layoutPreviewEl.appendChild(div);
         });
+      };
+
+      const renderCandidateComparison = (priorityBalance) => {
+        if (!candidateCompareEl || !candidateSummaryEl) return;
+        candidateCompareEl.innerHTML = '';
+        if (!priorityBalance?.pages?.length) {
+          candidateSummaryEl.textContent = '暂无候选方案对比信息';
+          return;
+        }
+        candidateSummaryEl.textContent = `共 ${priorityBalance.pages.length} 个页面候选方案`;
+        const formatValue = (val) =>
+          typeof val === 'number' && Number.isFinite(val) ? val.toFixed(2) : '-';
+
+        priorityBalance.pages.forEach((page) => {
+          const section = document.createElement('div');
+          section.className = 'candidate-section';
+          const title = document.createElement('div');
+          title.className = 'summary';
+          title.textContent = `${page.pageName || page.pageId} · 候选 ${page.candidateCount || 0}`;
+          section.appendChild(title);
+
+          const reason = document.createElement('div');
+          reason.className = 'candidate-note';
+          reason.textContent = `选中方案：${page.winner?.id || '-'}${page.selectionReason ? ` · ${page.selectionReason}` : ''}`;
+          section.appendChild(reason);
+
+          const table = document.createElement('div');
+          table.className = 'candidate-table';
+          const header = document.createElement('div');
+          header.className = 'candidate-row header';
+          header.innerHTML =
+            '<div>候选</div><div>密度</div><div>超载</div><div>语义风险</div><div>稳定性变化</div><div>可读性风险</div>';
+          table.appendChild(header);
+
+          (page.candidates || []).forEach((cand) => {
+            const row = document.createElement('div');
+            row.className = 'candidate-row';
+            if (page.winner?.id === cand.id) row.classList.add('winner');
+            row.innerHTML = `<div>${cand.id || '-'}</div>
+              <div>${formatValue(cand.objectives?.density)}</div>
+              <div>${formatValue(cand.objectives?.overload)}</div>
+              <div>${formatValue(cand.objectives?.semanticRisk)}</div>
+              <div>${formatValue(cand.objectives?.instability)}</div>
+              <div>${formatValue(cand.objectives?.readabilityRisk)}</div>`;
+            table.appendChild(row);
+          });
+
+          section.appendChild(table);
+
+          const semantic = page.winner?.semantic;
+          if (semantic) {
+            const semanticNote = document.createElement('div');
+            semanticNote.className = 'candidate-note';
+            const mustKeep = (semantic.mustKeep || []).map((it) => it.name || it.id).join('、');
+            const risks = (semantic.risks || []).map((it) => it.name || it.id).join('、');
+            semanticNote.textContent = `语义评估：${semantic.summary || ''}${
+              mustKeep ? ` · 不可降级项：${mustKeep}` : ''
+            }${risks ? ` · 风险项：${risks}` : ''}`;
+            section.appendChild(semanticNote);
+          }
+
+          candidateCompareEl.appendChild(section);
+        });
+      };
+
+      const extractPriorityBalanceFromTrace = (trace) => {
+        const step = (trace?.steps || []).find((s) => s.agent === 'priority-balance');
+        return step?.selection || null;
       };
 
       const renderEditOps = (ops = [], summary = '') => {
@@ -1380,6 +1571,23 @@
           item.primaryColor ? ` | 主色:${item.primaryColor}` : ''
         }${item.sampleText ? ` | 文案:${item.sampleText}` : ''}`;
         libraryDetailEl.appendChild(meta);
+
+        const stats = item.layerStats || {};
+        const statsLabel = document.createElement('div');
+        statsLabel.className = 'detail-label';
+        statsLabel.textContent = '图层结构统计';
+        const statsBox = document.createElement('div');
+        statsBox.className = 'readonly-box';
+        statsBox.textContent = `文本:${stats.textNodeCount ?? 0} | 形状:${stats.shapeNodeCount ?? 0} | 深度:${stats.groupDepth ?? 1} | AutoLayout:${stats.autoLayoutEnabled ? '是' : '否'} | 字号:${stats.dominantFontSize || '-'} | 色数:${stats.colorChannelCount ?? 0}`;
+        libraryDetailEl.appendChild(statsLabel);
+        libraryDetailEl.appendChild(statsBox);
+
+        const ergoLabel = document.createElement('div');
+        ergoLabel.className = 'detail-label';
+        ergoLabel.textContent = '工效学指标（v_vis / v_int / cap）';
+        const ergoBox = renderErgonomics(item);
+        libraryDetailEl.appendChild(ergoLabel);
+        libraryDetailEl.appendChild(ergoBox);
 
         const badgeRow = document.createElement('div');
         badgeRow.className = 'chip-row';
@@ -1560,16 +1768,6 @@
         interactionWrap.appendChild(interactionLabel);
         interactionWrap.appendChild(interactionInput);
         libraryDetailEl.appendChild(interactionWrap);
-
-        const stats = item.layerStats || {};
-        const statsLabel = document.createElement('div');
-        statsLabel.className = 'detail-label';
-        statsLabel.textContent = '图层结构统计';
-        const statsBox = document.createElement('div');
-        statsBox.className = 'readonly-box';
-        statsBox.textContent = `文本:${stats.textNodeCount ?? 0} | 形状:${stats.shapeNodeCount ?? 0} | 深度:${stats.groupDepth ?? 1} | AutoLayout:${stats.autoLayoutEnabled ? '是' : '否'} | 字号:${stats.dominantFontSize || '-'} | 色数:${stats.colorChannelCount ?? 0}`;
-        libraryDetailEl.appendChild(statsLabel);
-        libraryDetailEl.appendChild(statsBox);
 
         const note = document.createElement('textarea');
         note.className = 'lib-note';
@@ -2394,6 +2592,7 @@
             const order = (msg.tracePreview?.agentOrder || []).join(' → ');
             traceSummaryEl.textContent = `Agent 顺序：${order || 'N/A'} · 迭代 ${msg.tracePreview?.iterations ?? '-'}`;
           }
+          renderCandidateComparison(msg.tracePreview?.priorityBalance);
           if (extractWarningEl) {
             extractWarningEl.textContent = msg.missing?.length
               ? `抽取缺失字段：${msg.missing.join(', ')}`
@@ -2405,6 +2604,7 @@
         if (msg.type === 'trace-data') {
           if (traceOutputEl) traceOutputEl.value = JSON.stringify(msg.trace || {}, null, 2);
           if (traceStatusEl) traceStatusEl.textContent = `已加载 Trace ${msg.traceId || ''}`;
+          renderCandidateComparison(extractPriorityBalanceFromTrace(msg.trace));
           return;
         }
 

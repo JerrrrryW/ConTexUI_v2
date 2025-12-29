@@ -71,6 +71,11 @@ type LayerStats = {
   colorChannelCount?: number;
 };
 type InteractionSupport = string;
+type ErgonomicsMetrics = {
+  vVis: number;
+  vInt: number;
+  cap: number;
+};
 type SlotBinding = { slotName: string; content: string };
 type LayoutRegion = {
   id: string;
@@ -281,6 +286,7 @@ type ComponentExample = {
   recommendedViewportZone?: ViewportZone | ViewportZone[] | null;
   interactionSupport?: InteractionSupport[];
   layerStats?: LayerStats;
+  ergonomics?: ErgonomicsMetrics;
   lastUpdated?: number;
 };
 
@@ -369,12 +375,71 @@ function inferInfoDensityProfile(stats?: LayerStats | null, slotCount = 0): Info
   return 'dense';
 }
 
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
+
+function roundMetric(value: number): number {
+  return Number(clamp01(value).toFixed(2));
+}
+
+function computeErgonomicsMetrics(
+  comp: ComponentExample,
+  stats: LayerStats,
+  slots: ComponentSlot[]
+): ErgonomicsMetrics {
+  const area = Math.max(1, (comp.width || 0) * (comp.height || 0));
+  const densitySignal =
+    (stats.textNodeCount || 0) +
+    (stats.shapeNodeCount || 0) * 0.6 +
+    (stats.colorChannelCount || 0) * 0.8 +
+    (stats.groupDepth || 1) * 0.4 +
+    slots.length * 0.5;
+  const vVis = roundMetric(densitySignal / Math.log(area + 10) / 6);
+
+  const interactionCount = comp.interactionSupport ? comp.interactionSupport.length : 0;
+  const interactionLoad = clamp01(interactionCount / 4);
+  const fontScore = stats.dominantFontSize
+    ? clamp01((stats.dominantFontSize - 10) / 10)
+    : 0.5;
+  const densityPenalty =
+    comp.infoDensityProfile === 'dense' ? 0.8 : comp.infoDensityProfile === 'normal' ? 0.5 : 0.2;
+  const vInt = roundMetric(0.4 * interactionLoad + 0.35 * densityPenalty + 0.25 * (1 - fontScore));
+
+  const footprintPenalty = comp.visualFootprint === 'large' ? 0.4 : comp.visualFootprint === 'medium' ? 0.2 : 0;
+  const densityBoost =
+    comp.infoDensityProfile === 'dense' ? 0.4 : comp.infoDensityProfile === 'normal' ? 0.25 : 0.1;
+  const slotBoost = Math.min(0.6, slots.length * 0.15);
+  const maxInstanceBoost =
+    typeof comp.recommendedMaxInstancesPerPage === 'number'
+      ? clamp01(comp.recommendedMaxInstancesPerPage / 6) * 0.3
+      : 0;
+  const cap = roundMetric(densityBoost + slotBoost + maxInstanceBoost - footprintPenalty);
+
+  return { vVis, vInt, cap };
+}
+
 function applyComponentDefaults(comp: ComponentExample): ComponentExample {
   const stats = comp.layerStats || defaultLayerStats();
   const slots = comp.slots || [];
   const viewportZone = Array.isArray(comp.recommendedViewportZone)
     ? comp.recommendedViewportZone[0]
     : comp.recommendedViewportZone;
+  const visualFootprint = comp.visualFootprint ?? inferVisualFootprint(comp.width, comp.height);
+  const infoDensityProfile = comp.infoDensityProfile ?? inferInfoDensityProfile(stats, slots.length);
+  const hasErgonomics =
+    comp.ergonomics &&
+    typeof comp.ergonomics.vVis === 'number' &&
+    typeof comp.ergonomics.vInt === 'number' &&
+    typeof comp.ergonomics.cap === 'number';
+  const ergonomics = hasErgonomics
+    ? comp.ergonomics
+    : computeErgonomicsMetrics(
+        { ...comp, visualFootprint, infoDensityProfile, interactionSupport: comp.interactionSupport || [] },
+        stats,
+        slots
+      );
   return {
     ...comp,
     tags: comp.tags || [],
@@ -382,8 +447,8 @@ function applyComponentDefaults(comp: ComponentExample): ComponentExample {
     taskStageAffinity: comp.taskStageAffinity || [],
     interactionSupport: comp.interactionSupport || [],
     priorityAffinity: comp.priorityAffinity ?? 'flexible',
-    visualFootprint: comp.visualFootprint ?? inferVisualFootprint(comp.width, comp.height),
-    infoDensityProfile: comp.infoDensityProfile ?? inferInfoDensityProfile(stats, slots.length),
+    visualFootprint,
+    infoDensityProfile,
     recommendedMaxInstancesPerPage:
       typeof comp.recommendedMaxInstancesPerPage === 'number'
         ? comp.recommendedMaxInstancesPerPage
@@ -393,7 +458,8 @@ function applyComponentDefaults(comp: ComponentExample): ComponentExample {
     dynamicBehavior: comp.dynamicBehavior ?? 'static',
     layoutRole: comp.layoutRole ?? null,
     recommendedViewportZone: viewportZone ?? 'any',
-    layerStats: stats
+    layerStats: stats,
+    ergonomics
   };
 }
 
@@ -2195,7 +2261,8 @@ async function buildLibrarySummaries() {
         dynamicBehavior: comp.dynamicBehavior,
         layoutRole: comp.layoutRole,
         recommendedViewportZone: comp.recommendedViewportZone,
-        interactionSupport: comp.interactionSupport
+        interactionSupport: comp.interactionSupport,
+        ergonomics: comp.ergonomics
       };
     })
   );
@@ -2241,6 +2308,7 @@ function applyEnrichResult(result: EnrichLibraryResponse): number {
         comp.interactionSupport as string[] | undefined,
         rec.interactionSupport as string[] | undefined
       ),
+      ergonomics: rec.ergonomics ?? comp.ergonomics,
       lastUpdated: Date.now()
     };
     return applyComponentDefaults(merged);
@@ -2307,6 +2375,9 @@ function buildLibraryContext(items: ComponentExample[]): string {
       if (item.primaryColor) parts.push(`主色:${item.primaryColor}`);
       if (item.sampleText) parts.push(`文案:${item.sampleText}`);
       if (item.note) parts.push(`备注:${item.note}`);
+      if (item.ergonomics) {
+        parts.push(`工效:v_vis ${item.ergonomics.vVis} v_int ${item.ergonomics.vInt} cap ${item.ergonomics.cap}`);
+      }
       return parts.join(' | ');
     })
     .join('\n');
@@ -2458,6 +2529,7 @@ type EnrichLibraryResponse = {
     layoutRole?: LayoutRole | null;
     recommendedViewportZone?: ViewportZone | ViewportZone[] | null;
     interactionSupport?: InteractionSupport[];
+    ergonomics?: ErgonomicsMetrics;
   }[];
 };
 type EditPageRequest = {
@@ -2537,6 +2609,7 @@ async function callEnrichLibrary(
     layoutRole?: LayoutRole | null;
     recommendedViewportZone?: ViewportZone | ViewportZone[] | null;
     interactionSupport?: InteractionSupport[];
+    ergonomics?: ErgonomicsMetrics;
   }[]
 ): Promise<EnrichLibraryResponse> {
   const response = await fetch(`${ENRICH_BASE}/api/enrich-library`, {
@@ -2800,7 +2873,7 @@ async function handleLayoutClosedLoop(msg: LayoutClosedLoopMessage) {
   }
   const targets =
     Array.isArray(msg.pageIds) && msg.pageIds.length
-      ? requirementModel.pages.filter((p) => msg.pageIds?.includes(p.id))
+      ? requirementModel.pages.filter((p) => (msg.pageIds || []).indexOf(p.id) !== -1)
       : requirementModel.pages.slice(0, 1);
   if (!targets.length) {
     figma.ui.postMessage({ type: 'layout-loop-status', status: 'error', message: '未找到页面' });

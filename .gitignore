@@ -9,3 +9,4 @@ code.js
 .DS_Store
 .env
 server/traces/
+server/
